@@ -1,0 +1,18 @@
+# Personal activity files (GPS tracks, heart rate) - never commit these
+data/
+*.fit
+*.gpx
+*.tcx
+*.kml
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS / tools
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+*.swp
