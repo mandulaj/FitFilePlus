@@ -378,5 +378,140 @@
     },
   });
 
+  // ---------- 3D terrain map ----------
+  // MapLibre GL JS is large, so it is not part of the file: it is fetched (pinned version, integrity-checked)
+  // only when this widget is first used. Terrain and map tiles need the network anyway.
+  const ML = {
+    js: 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js', jsSri: 'sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj',
+    css: 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css', cssSri: 'sha384-MinO0mNliZ3vwppuPOUnGa+iq619pfMhLVUXfC4LHwSCvF9H+6P/KO4Q7qBOYV5V',
+    dem: 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png',
+  };
+  let mlPromise = null;
+  function loadMapLibre() {
+    if (window.maplibregl) return Promise.resolve();
+    if (!mlPromise) mlPromise = new Promise((res, rej) => {
+      const l = el('link'); l.rel = 'stylesheet'; l.href = ML.css; l.integrity = ML.cssSri; l.crossOrigin = 'anonymous'; document.head.appendChild(l);
+      const sc = el('script'); sc.src = ML.js; sc.integrity = ML.jsSri; sc.crossOrigin = 'anonymous';
+      sc.onload = () => (window.maplibregl ? res() : rej(new Error('library did not initialise')));
+      sc.onerror = () => { mlPromise = null; rej(new Error('could not download the 3D map library (offline?)')); };
+      document.head.appendChild(sc);
+    });
+    return mlPromise;
+  }
+  F.registerWidget('map3d', {
+    title: '3D map', multi: false, col: 'R',
+    available: (A) => A.hasGps,
+    tip: 'The track on 3D terrain, coloured like the 2D map. <b>Drag</b> to move, <b>right-drag or Ctrl+drag</b> to tilt and rotate, <b>scroll</b> to zoom. Hovering the track shows that moment in the chart; the selection is emphasised. The 3D engine and the terrain are downloaded when this widget is opened, so it needs an internet connection. Terrain detail is roughly 10–30 m: good for hills and mountains, coarse inside towns.',
+    create(ctx) {
+      const o = ctx.opts; if (!o.layer) o.layer = F.S.layer && F.LAYERS[F.S.layer] && F.S.layer !== 'tf' ? F.S.layer : 'topo'; if (!o.relief) o.relief = 1.5;
+      const box = el('div', 'map3d'), msg = el('div', 'wnote', 'Loading 3D engine…'); ctx.body.appendChild(box); ctx.body.appendChild(msg);
+      box.style.height = (o.h || 420) + 'px';
+      const lay = el('select'); lay.title = 'Map draped over the terrain';
+      for (const id in F.LAYERS) if (id !== 'tf') lay.add(new Option(id === 'none' ? 'Terrain shading only' : F.LAYERS[id].name, id)); lay.value = o.layer;
+      const rel = el('select'); rel.title = 'Vertical exaggeration of the terrain'; [[1, 'Relief ×1'], [1.5, 'Relief ×1.5'], [2, 'Relief ×2'], [3, 'Relief ×3']].forEach(([v, t]) => rel.add(new Option(t, v))); rel.value = String(o.relief);
+      const reset = el('button', 'btn small', 'Reset view'); reset.title = 'Fit the track (or the selection) again, tilted';
+      ctx.ctl.appendChild(lay); ctx.ctl.appendChild(rel); ctx.ctl.appendChild(reset);
+      let map = null, ready = false, dead = false, marker = null, line = null, pending = null;
+
+      // decimated track split into runs of equal colour (one feature per run, colour as a property).
+      // Per-feature colours are used instead of a line gradient: gradient lines are not drawn on terrain.
+      const buildLine = (lo, hi) => {
+        const A = F.A, step = Math.max(1, Math.ceil((hi - lo + 1) / 3000)), idx = []; for (let i = lo; i <= hi; i += step) idx.push(i); if (idx[idx.length - 1] !== hi) idx.push(hi);
+        const coords = idx.map((i) => [A.lon[i], A.lat[i]]), key = F.S.colorBy, vals = A.smooth[key], runs = [];
+        let cur = null, start = 0;
+        const flush = (end) => { if (cur != null && end > start) runs.push({ type: 'Feature', properties: { c: cur }, geometry: { type: 'LineString', coordinates: coords.slice(start, end + 1) } }); };
+        for (let p = 0; p < idx.length - 1; p++) {
+          const c = A.pc[idx[p + 1]] !== A.pc[idx[p]] ? null : F.colorOf(key, vals[idx[p]] != null ? vals[idx[p]] : vals[idx[p + 1]]); // null = pause: leave a gap
+          if (c !== cur) { flush(p); cur = c; start = p; }
+        }
+        flush(idx.length - 1);
+        // outline: one continuous line per stretch between pauses, so the edge is smooth rather than beaded per colour run
+        const parts = []; let seg = [coords[0]];
+        for (let p = 0; p < idx.length - 1; p++) { if (A.pc[idx[p + 1]] !== A.pc[idx[p]]) { if (seg.length > 1) parts.push(seg); seg = []; } seg.push(coords[p + 1]); }
+        if (seg.length > 1) parts.push(seg);
+        return { geo: { type: 'FeatureCollection', features: runs }, edge: { type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: parts } }, coords };
+      };
+      const setBase = () => {
+        if (map.getLayer('base')) map.removeLayer('base'); if (map.getSource('base')) map.removeSource('base');
+        const L = F.LAYERS[o.layer], before = map.getLayer('shade') ? 'shade' : undefined;
+        if (L && L.url) {
+          const subs = (L.o.subdomains || 'abc').split(''), urls = (L.url.indexOf('{s}') >= 0 ? subs : ['']).map((sd) => L.url.replace('{s}', sd).replace('{r}', ''));
+          map.addSource('base', { type: 'raster', tiles: urls, tileSize: 256, maxzoom: L.o.maxNativeZoom || 18, attribution: L.o.attribution || '' });
+          map.addLayer({ id: 'base', type: 'raster', source: 'base' }, before);
+        }
+        map.setPaintProperty('shade', 'hillshade-exaggeration', L && L.url ? 0.25 : 0.7);
+        map.setPaintProperty('bg', 'background-color', L && L.url ? '#8a9199' : '#3b4252');
+      };
+      const drawTrack = (fit) => {
+        const A = F.A; if (!ready || !A || !A.hasGps) return;
+        const sel = F.activeSel(), all = buildLine(0, A.n - 1), part = sel ? buildLine(sel[0], sel[1]) : null; line = part || all;
+        map.getSource('track').setData(all.geo); map.getSource('track-edge').setData(all.edge);
+        map.setPaintProperty('track', 'line-opacity', sel ? 0.5 : 1); map.setPaintProperty('track-case', 'line-opacity', sel ? 0.4 : 1); map.setPaintProperty('track-halo', 'line-opacity', sel ? 0.4 : 0.95);
+        map.getSource('sel').setData(part ? part.geo : { type: 'FeatureCollection', features: [] }); map.getSource('sel-edge').setData(part ? part.edge : { type: 'FeatureCollection', features: [] });
+        if (fit) fitView(false);
+      };
+      const fitView = (anim) => {
+        if (!line) return; const b = new maplibregl.LngLatBounds(line.coords[0], line.coords[0]); for (const c of line.coords) b.extend(c);
+        map.fitBounds(b, { padding: 50, pitch: 60, bearing: -20, animate: !!anim, maxZoom: 15 });
+      };
+      const mark = () => {
+        const A = F.A, i = F.S.hover; if (!ready || !marker) return;
+        if (!A || i == null || !A.hasGps) { marker.remove(); return; }
+        marker.setLngLat([A.lon[i], A.lat[i]]).addTo(map);
+      };
+      const start = () => {
+        if (dead) return;
+        try {
+          map = new maplibregl.Map({ container: box, style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#3b4252' } }] }, center: [8.54, 47.37], zoom: 11, pitch: 60, bearing: -20, maxPitch: 80, attributionControl: { compact: true } });
+        } catch (e) { msg.textContent = '3D view is not available: this browser could not start WebGL.'; return; }
+        map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left');
+        map.on('error', (e) => { if (!ready) console.warn('3D map', e && e.error); });
+        map.on('load', () => {
+          if (dead) return;
+          map.addSource('dem', { type: 'raster-dem', tiles: [ML.dem], tileSize: 256, maxzoom: 15, encoding: 'terrarium', attribution: 'Terrain: Mapzen, AWS Open Data' });
+          map.addSource('dem2', { type: 'raster-dem', tiles: [ML.dem], tileSize: 256, maxzoom: 15, encoding: 'terrarium' });
+          map.setTerrain({ source: 'dem', exaggeration: +o.relief });
+          map.addLayer({ id: 'shade', type: 'hillshade', source: 'dem2', paint: { 'hillshade-exaggeration': 0.7, 'hillshade-shadow-color': '#0b1020' } });
+          const empty = { type: 'FeatureCollection', features: [] }, round = { 'line-cap': 'round', 'line-join': 'round' };
+          map.addSource('track', { type: 'geojson', data: empty });
+          map.addSource('sel', { type: 'geojson', data: empty }); map.addSource('track-edge', { type: 'geojson', data: empty }); map.addSource('sel-edge', { type: 'geojson', data: empty });
+          // white outer + dark inner edge so the line separates from any map colour (as on the 2D map)
+          map.addLayer({ id: 'track-halo', type: 'line', source: 'track-edge', layout: round, paint: { 'line-color': '#ffffff', 'line-width': 10 } });
+          map.addLayer({ id: 'track-case', type: 'line', source: 'track-edge', layout: round, paint: { 'line-color': '#0b0f1a', 'line-width': 7.5 } });
+          map.addLayer({ id: 'track', type: 'line', source: 'track', layout: round, paint: { 'line-width': 5, 'line-color': ['get', 'c'] } });
+          map.addLayer({ id: 'sel-case', type: 'line', source: 'sel-edge', layout: round, paint: { 'line-color': '#ffffff', 'line-width': 12 } });
+          map.addLayer({ id: 'sel-case2', type: 'line', source: 'sel-edge', layout: round, paint: { 'line-color': '#0b0f1a', 'line-width': 9.5 } });
+          map.addLayer({ id: 'sel', type: 'line', source: 'sel', layout: round, paint: { 'line-width': 6.5, 'line-color': ['get', 'c'] } });
+          const dot = el('div', 'map3d-dot'); marker = new maplibregl.Marker({ element: dot });
+          ready = true; msg.textContent = '';
+          setBase(); drawTrack(true); mark();
+        });
+        // hover: nearest track point to the mouse (in screen space, selection first)
+        map.on('mousemove', (e) => {
+          const A = F.A; if (!ready || !A || !A.hasGps) return;
+          const [lo, hi] = F.selRange(), step = Math.max(1, Math.ceil((hi - lo + 1) / 1500)); let best = -1, bd = 18 * 18;
+          for (let i = lo; i <= hi; i += step) { const p = map.project([A.lon[i], A.lat[i]]), d = (p.x - e.point.x) * (p.x - e.point.x) + (p.y - e.point.y) * (p.y - e.point.y); if (d < bd) { bd = d; best = i; } }
+          map.getCanvas().style.cursor = best < 0 ? '' : 'crosshair';
+          F.setHover(best < 0 ? null : best, 'widget');
+        });
+        map.on('mouseout', () => F.setHover(null, 'widget'));
+      };
+      loadMapLibre().then(start, (e) => { msg.textContent = '3D view is not available: ' + e.message; });
+      lay.onchange = () => { o.layer = lay.value; ctx.save(); if (ready) setBase(); };
+      rel.onchange = () => { o.relief = +rel.value; ctx.save(); if (ready) map.setTerrain({ source: 'dem', exaggeration: o.relief }); };
+      reset.onclick = () => { if (ready) fitView(true); };
+      const ro = onResize(ctx.body, () => { if (map) map.resize(); });
+      return {
+        update(reason) {
+          if (!ready) return;
+          if (reason === 'hover') { mark(); return; }
+          if (reason === 'sel') { clearTimeout(pending); pending = setTimeout(() => drawTrack(false), 60); return; }
+          drawTrack(reason === 'load');
+        },
+        destroy() { dead = true; ro.disconnect(); clearTimeout(pending); try { if (map) map.remove(); } catch (e) { /* ignore */ } },
+      };
+    },
+  });
+
   F.widgetsReady();
 })();

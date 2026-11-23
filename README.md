@@ -31,6 +31,8 @@ No install, no account, no server. To use it offline, download [`fitfileplus.htm
 - **Elevation profile coloured by gradient** (red/green, red/blue or plasma).
 - **Units and themes**: metric or imperial, pace or speed (min/km, km/h, min/mi, mph); system, dark, black and light themes.
 - **Hover help** on every control instead of permanent explanatory text; all settings are remembered in the browser and can be reset from the ⚙ menu.
+- **Optional widgets** (＋ Widgets): scatter of any two metrics, distributions, hill profile, drift / decoupling, best efforts, climbs, and a 3D terrain map. The default panels can be hidden too; the arrangement is remembered.
+- **Replay** of the track with the chart cursor following.
 - **Only what the file contains is shown.** Missing metrics, laps or GPS simply hide the related controls. Distance and pace are derived from GPS when absent.
 
 ## Supported files
@@ -76,6 +78,7 @@ Stride length, leg spring stiffness, pace and power have no universal reference 
 
 - The activity file is parsed in the browser. Nothing is uploaded.
 - The last opened file is kept in the browser's IndexedDB so a reload shows it again; "Close file" in the ⚙ menu removes it.
+- The optional 3D map downloads its engine from a CDN (jsDelivr) and terrain tiles from AWS when it is opened; without that widget no such requests are made.
 - Map tiles are fetched from the selected tile provider, which therefore sees which area you look at. Choose "No basemap" to avoid any network request.
 - Settings (layout, band edges, map choice, optional Thunderforest key) are kept in the browser's `localStorage`.
 
@@ -87,6 +90,7 @@ src/style.css    styles
 src/fit.js       minimal FIT decoder (no dependencies; also usable from node)
 src/formats.js   GPX / TCX / KML readers producing the same structure as the FIT decoder
 src/app.js       UI
+src/widgets.js   optional add-on widgets (use the small API app.js exposes as window.FFP)
 vendor/          Leaflet and uPlot, pinned
 build.py         inlines everything into fitfileplus.html
 index.html       GitHub Pages entry point, forwards to fitfileplus.html
@@ -126,6 +130,7 @@ Put your own activity files in `data/`; that folder is git-ignored.
 
 - [Leaflet](https://leafletjs.com) (BSD-2-Clause) for the map
 - [uPlot](https://github.com/leeoniya/uPlot) (MIT) for the chart
+- [MapLibre GL JS](https://maplibre.org) (BSD-3-Clause) for the optional 3D map; not bundled, loaded from a CDN when that widget is used. Terrain tiles: Mapzen / AWS Open Data.
 - Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors; tiles by OpenTopoMap, CyclOSM, swisstopo, Esri
 
 Not affiliated with any watch or platform vendor.
