@@ -1,5 +1,7 @@
 # FitFilePlus
 
+[![Buy me a Beer](https://img.shields.io/badge/Buy%20me%20a%20Beer-%245-orange)](https://www.buymeacoffee.com/mandula)
+
 A single-file, offline-first viewer for running activities. Drop a `.fit` file (or `.gpx`, `.tcx`, `.kml`) onto the page and get a linked chart, map, lap table and stats view, with running-form metrics (ground contact time, cadence, stride height, …) colour-coded on the map.
 
 Built to get what watch vendors' web views usually lack: a zoomed chart section highlighted on the map, outdoor-oriented base maps, and form metrics drawn along the track.
