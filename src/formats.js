@@ -21,11 +21,14 @@
       const name = c.localName, low = name.toLowerCase(); if (known.includes(low)) continue;
       const s = c.textContent.trim(); if (!s || !/^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(s)) continue;
       const key = 'x_' + low;
-      if (!extras.has(key)) extras.set(key, { key, label: pretty(name), unit: '', unknown: false });
+      if (!extras.has(key)) extras.set(key, { key, label: pretty(name), unit: c.getAttribute('unit') || '', unknown: false });
       (r.x || (r.x = {}))[key] = parseFloat(s);
     }
   }
-  const GPX_KNOWN = ['hr', 'heartrate', 'cad', 'cadence', 'runcadence', 'power', 'watts', 'pwr', 'atemp', 'temp', 'temperature', 'speed', 'distance'];
+  // tags written by this app's own GPX export (src/export.js), so a round trip keeps running-form metrics and laps
+  const FFP_TAGS = { vo: 'vertical_oscillation', gct: 'ground_contact_time', vr: 'vertical_ratio', balance: 'ground_contact_balance', stride: 'stride_length', effort: 'effort_pace', lss: 'leg_spring_stiffness' };
+  const GPX_KNOWN = ['hr', 'heartrate', 'cad', 'cadence', 'runcadence', 'power', 'watts', 'pwr', 'atemp', 'temp', 'temperature', 'speed', 'distance', 'cadence_exact', 'lap'].concat(Object.values(FFP_TAGS));
+  const LAP_KEYS = ['elapsed', 'timer', 'dist', 'calories', 'avgSpeed', 'maxSpeed', 'avgHr', 'maxHr', 'avgCadence', 'maxCadence', 'avgPower', 'ascent', 'descent', 'avgVo', 'avgGct', 'avgVr', 'avgStride', 'avgBalance', 'avgEffort', 'avgTemp'];
   const TCX_KNOWN = ['speed', 'watts', 'runcadence'];
 
   const SPORTS = [[/run|jog|trail/i, 1], [/cycl|bik|ride/i, 2], [/swim/i, 5], [/hik|trek|mountaineer/i, 17], [/walk/i, 11]];
@@ -57,7 +60,7 @@
   }
   const finish = (records, laps, sport, name, extra) => {
     records = records.filter((r) => r.t != null).sort((a, b) => a.t - b.t);
-    fixCadence(records, sport);
+    if (!(extra && extra.cadExact)) fixCadence(records, sport);
     if (!(extra && extra.noTime)) fixSpeed(records);
     return Object.assign({ records, laps, session: { sport }, events: [], device: { name: name || null }, devFields: {}, extras: [] }, extra || {});
   };
@@ -67,7 +70,7 @@
     let pts = doc.getElementsByTagName('trkpt');
     if (!pts.length) pts = doc.getElementsByTagName('rtept');
     if (!pts.length) pts = doc.getElementsByTagName('wpt');
-    let timed = 0;
+    let timed = 0, cadExact = false;
     for (const p of pts) {
       const r = blank();
       r.lat = num(p.getAttribute('lat')); r.lon = num(p.getAttribute('lon'));
@@ -80,6 +83,8 @@
         r.temp = num(deep(ext, ['atemp', 'temp', 'temperature']));
         r.speed = num(deep(ext, ['speed']));
         r.dist = num(deep(ext, ['distance']));
+        const ce = num(deep(ext, ['cadence_exact'])); if (ce != null) { r.cadence = ce; cadExact = true; }
+        for (const k in FFP_TAGS) { const v = num(deep(ext, [FFP_TAGS[k]])); if (v != null) r[k] = v; }
         scanExtras(ext, GPX_KNOWN, r, extras);
       }
       records.push(r);
@@ -90,7 +95,15 @@
     if (noTime) records.forEach((r, i) => { r.t = i * 1000; r.speed = null; });
     // a distance column that never moves is a placeholder, not data
     if (!records.some((r) => r.dist > 0)) records.forEach((r) => { r.dist = null; });
-    return finish(records, [], sport, null, { noTime, extras: Array.from(extras.values()) });
+    const laps = [];
+    if (trk) for (const le of trk.getElementsByTagName('*')) {
+      if (le.localName !== 'lap') continue;
+      const start = time(le.getAttribute('start')), end = time(le.getAttribute('end')); if (start == null || end == null) continue;
+      const lap = { index: laps.length + 1, start, end }; for (const k of LAP_KEYS) lap[k] = num(le.getAttribute(k));
+      laps.push(lap);
+    }
+    const creator = doc.documentElement.getAttribute('creator');
+    return finish(records, laps, sport, creator && creator !== 'FitFilePlus' ? creator : (trk && txt(trk, 'src')) || null, { noTime, cadExact, extras: Array.from(extras.values()) });
   }
 
   function parseTcx(doc) {

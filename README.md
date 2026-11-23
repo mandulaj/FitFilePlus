@@ -23,7 +23,7 @@ No install, no account, no server. To use it offline, download [`fitfileplus.htm
 - **Everything is linked.** Drag across the chart, the overview strip, lap rows, or along the track on the map: the other views, the stats and the legend follow live.
 - **Colour the track by any metric**, either in reference zones or on a continuous colour scale (Plasma / Viridis). Optionally colour that metric's chart line the same way.
 - **Reference zones for running form**: cadence, ground contact time, stride height (vertical oscillation), stride ratio (vertical ratio) and L/R balance use published running-dynamics reference gauges. Heart rate uses % of max HR. All band edges are editable.
-- **Outdoor base maps**: OpenTopoMap, OpenStreetMap, CyclOSM, swisstopo (map and aerial), Esri satellite, optional Thunderforest Outdoors (own API key), or no base map.
+- **Outdoor base maps**: OpenTopoMap, OpenStreetMap, CyclOSM, swisstopo (map and aerial), Esri satellite, optional Mapy.com Outdoor and Winter and Thunderforest Outdoors (own free API key each), or no base map.
 - **Lap table**: sortable, column chooser, best/slowest lap marked, drag across rows to select several laps.
 - **Quick selections**: best / worst lap, fastest / slowest continuous kilometre.
 - **Pauses** are marked on the chart and break the track on the map.
@@ -31,9 +31,11 @@ No install, no account, no server. To use it offline, download [`fitfileplus.htm
 - **Elevation profile coloured by gradient** (red/green, red/blue or plasma).
 - **Units and themes**: metric or imperial, pace or speed (min/km, km/h, min/mi, mph); system, dark, black and light themes.
 - **Hover help** on every control instead of permanent explanatory text; all settings are remembered in the browser and can be reset from the ⚙ menu.
-- **Optional widgets** (＋ Widgets): scatter of any two metrics, distributions, hill profile, drift / decoupling, best efforts, climbs, and a 3D terrain map. The default panels can be hidden too; the arrangement is remembered.
+- **Optional widgets** (＋ Widgets): scatter of any two metrics, distributions, hill profile, drift / decoupling, best efforts, climbs, interval overlay (laps stacked from a common start), speed = cadence × step length, and a 3D terrain map with a follow mode that tilts the view to see over mountains. In the scatter plots, draw a box or lasso around a group of dots: those moments stay in colour on the map and in the chart, everything else is faded. Every widget can be resized; the default panels can be hidden too; the arrangement is remembered.
+- **Replay** from the top bar: the position dot runs along the track; with Follow on, the 2D and 3D maps stay centred on it.
+- **Export** the whole activity or the selection as FIT or GPX. FIT → FIT and GPX → GPX keep the original data untouched (a selection is cut out of the original file); converting keeps everything the target format can hold. Running-form metrics, extra fields and laps go into GPX as additional tags that FitFilePlus reads back.
 - **Replay** of the track with the chart cursor following.
-- **Compare page** (`compare.html`, linked from ⚙): several activities overlaid by distance or time, time gap on a shared route, summary differences and trends over time.
+- **Compare page** (`compare.html`, **Compare with…** in the top bar): several activities overlaid by distance or time, time gap on a shared route, summary differences and trends over time. The activity open in the analyzer is carried over.
 - **Only what the file contains is shown.** Missing metrics, laps or GPS simply hide the related controls. Distance and pace are derived from GPS when absent.
 
 ## Supported files
@@ -79,9 +81,9 @@ Stride length, leg spring stiffness, pace and power have no universal reference 
 
 - The activity file is parsed in the browser. Nothing is uploaded.
 - The last opened file is kept in the browser's IndexedDB so a reload shows it again; "Close file" in the ⚙ menu removes it.
-- The optional 3D map downloads its engine from a CDN (jsDelivr) and terrain tiles from AWS when it is opened; without that widget no such requests are made.
+- Everything, including the 3D engine, is inside the HTML file; no code is loaded from elsewhere. Only map images are fetched: map tiles from the chosen map provider, and for the optional 3D map terrain tiles from [Mapterhorn](https://mapterhorn.com).
 - Map tiles are fetched from the selected tile provider, which therefore sees which area you look at. Choose "No basemap" to avoid any network request.
-- Settings (layout, band edges, map choice, optional Thunderforest key) are kept in the browser's `localStorage`.
+- Settings (layout, band edges, map choice, optional map API keys) are kept in the browser's `localStorage`.
 
 ## Development
 
@@ -94,7 +96,8 @@ src/app.js       UI
 src/core.js      helpers shared by both pages
 src/compare.*    the separate multi-activity page (built as compare.html)
 src/widgets.js   optional add-on widgets (use the small API app.js exposes as window.FFP)
-vendor/          Leaflet and uPlot, pinned
+src/export.js    FIT / GPX export (lossless copy or cut of the original, or written from the decoded data)
+vendor/          Leaflet, uPlot and MapLibre GL JS, pinned
 build.py         inlines everything into fitfileplus.html
 index.html       GitHub Pages entry point, forwards to fitfileplus.html
 .assets/         README screenshots
@@ -133,7 +136,7 @@ Put your own activity files in `data/`; that folder is git-ignored.
 
 - [Leaflet](https://leafletjs.com) (BSD-2-Clause) for the map
 - [uPlot](https://github.com/leeoniya/uPlot) (MIT) for the chart
-- [MapLibre GL JS](https://maplibre.org) (BSD-3-Clause) for the optional 3D map; not bundled, loaded from a CDN when that widget is used. Terrain tiles: Mapzen / AWS Open Data.
-- Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors; tiles by OpenTopoMap, CyclOSM, swisstopo, Esri
+- [MapLibre GL JS](https://maplibre.org) (BSD-3-Clause) for the optional 3D map, bundled. Terrain tiles: [Mapterhorn](https://mapterhorn.com/attribution).
+- Map data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors; tiles by OpenTopoMap, CyclOSM, swisstopo, Esri, Mapy.com (Seznam.cz)
 
 Not affiliated with any watch or platform vendor.
