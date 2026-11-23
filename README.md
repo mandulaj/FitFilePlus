@@ -90,7 +90,9 @@ src/app.js       UI
 vendor/          Leaflet and uPlot, pinned
 build.py         inlines everything into fitfileplus.html
 index.html       GitHub Pages entry point, forwards to fitfileplus.html
-.assets/         README screenshot
+.assets/         README screenshots
+web/             favicon and link-preview image for the hosted page
+.nojekyll        makes GitHub Pages serve the files as they are
 ```
 
 Build (Python 3, no packages needed):
