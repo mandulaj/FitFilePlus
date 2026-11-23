@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Inline src/ and vendor/ into one self-contained file: fitfileplus.html
+"""Inline src/ and vendor/ into self-contained pages.
 
-  python3 build.py                      -> fitfileplus.html
+  python3 build.py                      -> fitfileplus.html (analyzer) and compare.html (multi-activity page)
   python3 build.py --embed run.fit out.html   -> test/demo build with that activity baked in
 """
 import base64
@@ -13,8 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
-def build(embed=None, out=ROOT / "fitfileplus.html"):
-    html = (ROOT / "src/index.html").read_text(encoding="utf-8")
+def build(embed=None, out=ROOT / "fitfileplus.html", src="src/index.html"):
+    html = (ROOT / src).read_text(encoding="utf-8")
 
     def inline(m):
         text = (ROOT / m.group(1)).read_text(encoding="utf-8")
@@ -35,3 +35,4 @@ if __name__ == "__main__":
         build(sys.argv[2], sys.argv[3])
     else:
         build()
+        build(out=ROOT / "compare.html", src="src/compare.html")

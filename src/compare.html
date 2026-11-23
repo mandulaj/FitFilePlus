@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script>try{var th=JSON.parse(localStorage.getItem("fitfileplus.theme")||'"system"');if(th==="system")th=window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";if(th!=="dark")document.documentElement.dataset.theme=th;}catch(e){}</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FitFilePlus · Compare</title>
+<meta name="description" content="Compare several activities side by side: overlay any metric, time gap on the same route, summary differences and trends over time. Runs locally in the browser.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d1220'/%3E%3Cpath d='M11 44 L22 29 L31 38 L43 19 L53 27' fill='none' stroke='%2322e06b' stroke-width='6.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='53' cy='27' r='6' fill='%23fff'/%3E%3Ccircle cx='53' cy='27' r='3' fill='%2322e06b'/%3E%3C/svg%3E">
+<style>/*INLINE:vendor/leaflet.css*/</style>
+<style>/*INLINE:vendor/uplot.css*/</style>
+<style>/*INLINE:src/style.css*/</style>
+<style>/*INLINE:src/compare.css*/</style>
+</head>
+<body>
+<header>
+  <div class="title">
+    <div id="actName">Compare activities</div>
+    <div id="actSub" class="muted">Drop two or more .fit, .gpx or .tcx files anywhere on this page</div>
+  </div>
+  <div class="row">
+    <a class="btn" href="fitfileplus.html" title="Back to the single-activity analyzer">← Analyzer</a>
+    <label class="btn" title="Add activity files. They are read in your browser, never uploaded, and kept in this browser until you remove them.">Add files<input id="fileInput" type="file" accept=".fit,.gpx,.tcx,.xml" multiple hidden></label>
+  </div>
+</header>
+
+<div id="empty">
+  <div class="dropbox">
+    <div class="big">Drop activity files here</div>
+    <div class="fmts"><b>.fit</b> · .gpx · .tcx</div>
+    <div class="muted">Add two or more activities to overlay their metrics, see the time gap on a shared route, compare summaries and follow trends over time. Files stay in this browser (remove them any time); nothing is uploaded.</div>
+  </div>
+</div>
+
+<main id="app" class="cmp" hidden>
+  <section class="col">
+    <div class="card">
+      <div class="hd"><h3>Activities</h3><span class="sp"></span><button class="btn small" id="clearAll" title="Remove all activities from this page and from this browser's storage">Remove all</button></div>
+      <div id="list"></div>
+      <div class="wnote">Tick = shown in charts and map · dot = reference for differences and the gap chart</div>
+    </div>
+    <div class="card">
+      <div class="hd"><h3>Summary</h3><span class="muted small" id="sumNote"></span></div>
+      <div class="tablewrap"><table id="summary"></table></div>
+    </div>
+  </section>
+  <section class="col">
+    <div class="card">
+      <div class="hd"><h3>Overlay</h3>
+        <label title="Metric drawn for every shown activity"><select id="metricSel"></select></label>
+        <span class="sp"></span>
+        <div class="seg" id="xSeg"><button data-x="dist" title="Align activities by distance covered">Distance</button><button data-x="time" title="Align activities by moving time">Time</button></div>
+      </div>
+      <div id="overlay"></div>
+    </div>
+    <div class="card" id="gapCard">
+      <div class="hd"><h3>Time gap to reference</h3><span class="muted small" id="gapNote"></span></div>
+      <div id="gap"></div>
+    </div>
+    <div class="card" id="trendCard">
+      <div class="hd"><h3>Trend over time</h3><label title="Value plotted for each activity by date"><select id="trendSel"></select></label><span class="muted small" id="trendNote"></span></div>
+      <div id="trend"></div>
+    </div>
+    <div class="card nopad" id="mapCard">
+      <div class="hd maptools"><h3>Map</h3><label title="Background map">Map <select id="layerSel"></select></label></div>
+      <div id="map"></div>
+    </div>
+  </section>
+</main>
+<div id="toast" hidden></div>
+<div id="dropveil" hidden>Drop activity files</div>
+
+<script>/*INLINE:vendor/leaflet.js*/</script>
+<script>/*INLINE:vendor/uplot.js*/</script>
+<script>/*INLINE:src/core.js*/</script>
+<script>/*INLINE:src/fit.js*/</script>
+<script>/*INLINE:src/formats.js*/</script>
+<script>/*EMBED*/</script>
+<script>/*INLINE:src/compare.js*/</script>
+</body>
+</html>

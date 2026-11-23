@@ -1,0 +1,15 @@
+/* compare page additions (base styles come from style.css) */
+main.cmp { grid-template-columns: minmax(320px, 460px) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 1000px) { main.cmp { grid-template-columns: minmax(0, 1fr); } }
+.cmp .col { min-height: 0; }
+.arow { display: grid; grid-template-columns: auto auto 12px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--rowline); font-size: 13px; }
+.arow .sw { width: 12px; height: 12px; border-radius: 3px; }
+.arow .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arow .sub { color: var(--muted); font-size: 12px; }
+.arow .rm { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 15px; }
+.arow .rm:hover { color: var(--text); }
+#summary td small { color: var(--muted); margin-left: 6px; }
+#summary th .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+#summary th { white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+#map { height: 380px; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }

@@ -33,6 +33,7 @@ No install, no account, no server. To use it offline, download [`fitfileplus.htm
 - **Hover help** on every control instead of permanent explanatory text; all settings are remembered in the browser and can be reset from the ⚙ menu.
 - **Optional widgets** (＋ Widgets): scatter of any two metrics, distributions, hill profile, drift / decoupling, best efforts, climbs, and a 3D terrain map. The default panels can be hidden too; the arrangement is remembered.
 - **Replay** of the track with the chart cursor following.
+- **Compare page** (`compare.html`, linked from ⚙): several activities overlaid by distance or time, time gap on a shared route, summary differences and trends over time.
 - **Only what the file contains is shown.** Missing metrics, laps or GPS simply hide the related controls. Distance and pace are derived from GPS when absent.
 
 ## Supported files
@@ -90,6 +91,8 @@ src/style.css    styles
 src/fit.js       minimal FIT decoder (no dependencies; also usable from node)
 src/formats.js   GPX / TCX / KML readers producing the same structure as the FIT decoder
 src/app.js       UI
+src/core.js      helpers shared by both pages
+src/compare.*    the separate multi-activity page (built as compare.html)
 src/widgets.js   optional add-on widgets (use the small API app.js exposes as window.FFP)
 vendor/          Leaflet and uPlot, pinned
 build.py         inlines everything into fitfileplus.html

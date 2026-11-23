@@ -15,20 +15,8 @@
     del(k) { try { localStorage.removeItem('fitfileplus.' + k); } catch (e) { /* ignore */ } },
   };
 
-  // ---------- formatting ----------
-  const pad = (n) => String(n).padStart(2, '0');
-  function fmtDur(s) {
-    if (s == null || !isFinite(s)) return '–';
-    s = Math.round(s);
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
-    return h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`;
-  }
-  function fmtPace(secPerKm) {
-    if (secPerKm == null || !isFinite(secPerKm) || secPerKm <= 0) return '–';
-    const s = Math.round(secPerKm);
-    return `${Math.floor(s / 60)}'${pad(s % 60)}"`;
-  }
-  const fx = (d) => (v) => (v == null || !isFinite(v) ? '–' : v.toFixed(d));
+  // formatting and numeric helpers shared with the compare page live in src/core.js
+  const { fmtDur, fmtPace, fx, lerpStops, roll, quantile } = window.FFCore;
 
   // ---------- colours ----------
   const C = { purple: '#a855f7', blue: '#3b82f6', green: '#22c55e', orange: '#f59e0b', red: '#ef4444', grey: '#8a8f9c' };
@@ -42,13 +30,6 @@
     plasma: { name: 'Plasma', stops: ['#2c0594', '#7e03a8', '#cc4778', '#f89540', '#f0f921'] },
   };
   let DIV = (GRADE_PALS[store.get('gradePal', 'rwg')] || GRADE_PALS.rwg).stops;
-  function lerpStops(stops, t) {
-    t = Math.max(0, Math.min(1, t));
-    const x = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
-    const a = parseInt(stops[i].slice(1), 16), b = parseInt(stops[i + 1].slice(1), 16);
-    const ch = (sh) => Math.round(((a >> sh) & 255) * (1 - f) + ((b >> sh) & 255) * f);
-    return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
-  }
 
   const REF = 'https://www8.garmin.com/manuals/webhelp/GUID-1E5740B3-60A1-4890-B39A-7587060D785A/EN-US/GUID-EE9E7F6F-49BE-4452-82E6-B40371D0AEC1.html';
   const DYN_LABELS = { purple: 'Elite · top 5%', blue: 'Great · 70–95th pct', green: 'Good · 30–69th pct', orange: 'Fair · 5–29th pct', red: 'Low · bottom 5%' };
@@ -243,21 +224,6 @@
     hover: null,
   };
 
-  function roll(arr, half, median) {
-    const n = arr.length, out = new Array(n).fill(null), buf = [];
-    for (let i = 0; i < n; i++) {
-      buf.length = 0;
-      for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) if (arr[j] != null) buf.push(arr[j]);
-      if (!buf.length || arr[i] == null) continue;
-      if (median) { buf.sort((a, b) => a - b); out[i] = buf[buf.length >> 1]; }
-      else { let s = 0; for (const v of buf) s += v; out[i] = s / buf.length; }
-    }
-    return out;
-  }
-  function quantile(arr, q) {
-    const v = arr.filter((x) => x != null && isFinite(x)).sort((a, b) => a - b);
-    return v.length ? v[Math.min(v.length - 1, Math.max(0, Math.round(q * (v.length - 1))))] : null;
-  }
   function fillNearest(arr) {
     const out = arr.slice(); let last = null;
     for (let i = 0; i < out.length; i++) { if (out[i] == null) out[i] = last; else last = out[i]; }
