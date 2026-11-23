@@ -10,6 +10,12 @@ No install, no account, no server. To use it offline, download [`fitfileplus.htm
 
 [![FitFilePlus: chart, map coloured by ground contact time, selection stats and lap table](.assets/preview.png)](https://mandulaj.github.io/FitFilePlus/)
 
+<details><summary>Light theme</summary>
+
+![FitFilePlus in the light theme](.assets/preview-light.png)
+
+</details>
+
 ## Features
 
 - **Everything is linked.** Drag across the chart, the overview strip, lap rows, or along the track on the map: the other views, the stats and the legend follow live.
@@ -67,6 +73,7 @@ Stride length, leg spring stiffness, pace and power have no universal reference 
 ## Privacy
 
 - The activity file is parsed in the browser. Nothing is uploaded.
+- The last opened file is kept in the browser's IndexedDB so a reload shows it again; "Close file" in the ⚙ menu removes it.
 - Map tiles are fetched from the selected tile provider, which therefore sees which area you look at. Choose "No basemap" to avoid any network request.
 - Settings (layout, band edges, map choice, optional Thunderforest key) are kept in the browser's `localStorage`.
 

@@ -1132,11 +1132,22 @@
     ab.dataset.tip = 'Chosen by sport: pace for running, walking, hiking, swimming; speed for cycling, skiing and similar.' + (A ? ` This ${(SPORT_NAMES[U.sport] || 'activity').toLowerCase()}: ${U.speed ? 'speed' : 'pace'}.` : '');
   }
 
-  let lastFile = null; // raw bytes of the loaded file, to reopen it after "Reset all settings"
-  function load(buf, name) {
+  // The last opened file is kept in the browser (IndexedDB: binary-safe, no practical size limit) so a
+  // reload brings it straight back. It never leaves the machine; "Close file" forgets it.
+  const fileDB = {
+    open() { return new Promise((res, rej) => { const r = indexedDB.open('fitfileplus', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); },
+    tx(mode, fn) { return this.open().then((db) => new Promise((res, rej) => { const t = db.transaction('kv', mode), q = fn(t.objectStore('kv')); t.oncomplete = () => { db.close(); res(q && q.result); }; t.onerror = t.onabort = () => { db.close(); rej(t.error); }; })); },
+    set(v) { return this.tx('readwrite', (st) => st.put(v, 'last')); },
+    get() { return this.tx('readonly', (st) => st.get('last')); },
+    del() { return this.tx('readwrite', (st) => st.delete('last')); },
+  };
+  let lastFile = null; // raw bytes of the loaded file
+  function load(buf, name, opts) {
     let act;
     try { const fit = dropFields(parseAny(buf)); registerExtras(fit); resolveSpeed(fit.session.sport == null ? null : fit.session.sport); applyUnits(); syncUnits(); act = process(fit, name); } catch (e) { console.error(e); toast('Could not read file: ' + e.message); return; }
     lastFile = { buf, name };
+    if (!(opts && opts.noSave)) { try { fileDB.set({ name, buf, saved: Date.now() }).catch(() => {}); } catch (e) { /* storage unavailable */ } }
+    $('closeFile').hidden = false;
     A = act; S.sel = null; S.preview = null; S.hover = null; lapUI.sort = null; savedView = null; followTo = null;
     syncUnits(); // now that an activity is loaded, the Auto tooltip can say what it resolved to
     $('empty').hidden = true; $('app').hidden = false;
@@ -1375,9 +1386,15 @@
     const re = sessionStorage.getItem('fitfileplus.reopen');
     if (re) { sessionStorage.removeItem('fitfileplus.reopen'); const o = JSON.parse(re); load(b64ToBuf(o.data), o.name); }
   } catch (e) { /* ignore */ }
+  $('closeFile').onclick = () => {
+    const done = () => location.reload();
+    try { fileDB.del().then(done, done); } catch (e) { done(); }
+  };
   if (!A && window.FITFILEPLUS_EMBED) {
     const bin = atob(window.FITFILEPLUS_EMBED.data), u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    load(u8.buffer, window.FITFILEPLUS_EMBED.name);
+    load(u8.buffer, window.FITFILEPLUS_EMBED.name, { noSave: true });
   }
+  // nothing loaded yet: bring back the file from the previous visit
+  if (!A) { try { fileDB.get().then((v) => { if (v && v.buf && !A) load(v.buf, v.name, { noSave: true }); }, () => {}); } catch (e) { /* storage unavailable */ } }
 })();

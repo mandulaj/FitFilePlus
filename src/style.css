@@ -167,3 +167,5 @@ header select { padding: 7px 8px; border-radius: 6px; }
 #chipTip div { margin-top: 4px; } #chipTip .hint { font-size: 11px; }
 #setMenu .btn { align-self: flex-start; margin-top: 4px; }
 #chipTip { max-width: 320px; }
+.ghlink { display: inline-flex; align-items: center; padding: 7px 9px; text-decoration: none; }
+.ghlink svg { display: block; }
