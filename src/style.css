@@ -169,3 +169,17 @@ header select { padding: 7px 8px; border-radius: 6px; }
 #chipTip { max-width: 320px; }
 .ghlink { display: inline-flex; align-items: center; padding: 7px 9px; text-decoration: none; }
 .ghlink svg { display: block; }
+
+/* widgets */
+.card.woff { display: none !important; }
+.menu label.na, .menu .btn.na { opacity: .45; }
+.menu .wadd { align-self: stretch; text-align: left; margin-top: 2px; }
+.wctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.wctl select { max-width: 150px; }
+.wbody { position: relative; min-width: 0; }
+.wbody canvas { display: block; width: 100%; }
+.wplot { position: relative; }
+.wplot canvas.ov { position: absolute; left: 0; top: 0; pointer-events: none; }
+.wnote { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.wbody table tbody tr.click { cursor: pointer; } .wbody table tbody tr.click:hover { background: var(--card2); }
+.wtabs { margin-bottom: 8px; }

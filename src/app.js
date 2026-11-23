@@ -437,7 +437,7 @@
   };
   // colour settings changed (metric, zones/continuous, palette, band edges): refresh everything that shows them
   const gradeFillOn = () => S.gradeFill && A.has.alt && A.has.grade;
-  function refreshColors() { drawTrack(); renderLegend(); if (S.chartColors && plot) { buildToggles(); buildChart(); } }
+  function refreshColors() { drawTrack(); renderLegend(); if (S.chartColors && plot) { buildToggles(); buildChart(); } widgetsUpdate('colors'); }
 
   // ---------- hover help ----------
   // One small card for the whole UI. Any element with a title / data-tip gets it (titles are moved to
@@ -611,6 +611,23 @@
       },
     }, [x, A.chart[ok]], $('overview'));
     ov.over.addEventListener('dblclick', () => plot.setScale('x', { min: x[0], max: x[x.length - 1] }));
+    // dragging inside the highlighted window moves it (keeps its width) instead of starting a new range.
+    // Capture phase on the root so this runs before uPlot's own drag handler.
+    const inWindow = (clientX) => {
+      if (!S.sel) return false;
+      const px = clientX - ov.over.getBoundingClientRect().left;
+      return px >= ov.valToPos(x[S.sel[0]], 'x') && px <= ov.valToPos(x[S.sel[1]], 'x');
+    };
+    ov.root.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || !inWindow(e.clientX)) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      const { min, max } = plot.scales.x, span = max - min, x0 = x[0], x1 = x[x.length - 1], perPx = (x1 - x0) / ov.over.clientWidth, startX = e.clientX;
+      const move = (ev) => { const a = Math.max(x0, Math.min(x1 - span, min + (ev.clientX - startX) * perPx)); plot.setScale('x', { min: a, max: a + span }); };
+      const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.style.cursor = ''; };
+      document.body.style.cursor = 'grabbing';
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+    }, true);
+    ov.over.addEventListener('mousemove', (e) => { ov.over.style.cursor = inWindow(e.clientX) ? 'grab' : ''; });
 
     if (S.sel) plot.setScale('x', { min: x[S.sel[0]], max: x[S.sel[1]] });
     else syncOverview();
@@ -645,7 +662,7 @@
   let selRaf = 0;
   function scheduleSelUpdate() {
     if (selRaf) return;
-    selRaf = requestAnimationFrame(() => { selRaf = 0; drawTrack(); renderSelStats(); renderLegend(); markLapRows(); });
+    selRaf = requestAnimationFrame(() => { selRaf = 0; drawTrack(); renderSelStats(); renderLegend(); markLapRows(); widgetsUpdate('sel'); });
   }
 
   // "12:34 · 3.21 km" for a record; time is left out for tracks without timestamps
@@ -662,7 +679,7 @@
   // ---------- hover sync ----------
   function setHover(i, src) {
     if (i === S.hover) return;
-    S.hover = i; renderReadout();
+    S.hover = i; renderReadout(); widgetsUpdate('hover');
     if (src !== 'chart' && plot) {
       syncing = true;
       if (i == null) plot.setCursor({ left: -10, top: -10 });
@@ -1148,6 +1165,7 @@
     lastFile = { buf, name };
     if (!(opts && opts.noSave)) { try { fileDB.set({ name, buf, saved: Date.now() }).catch(() => {}); } catch (e) { /* storage unavailable */ } }
     $('closeFile').hidden = false;
+    stopReplay();
     A = act; S.sel = null; S.preview = null; S.hover = null; lapUI.sort = null; savedView = null; followTo = null;
     syncUnits(); // now that an activity is loaded, the Auto tooltip can say what it resolved to
     $('empty').hidden = true; $('app').hidden = false;
@@ -1180,6 +1198,7 @@
     safe('chart', () => { buildToggles(); buildChart(); });
     if (A.hasGps) safe('map', () => { map.invalidateSize(); fitMap(); drawTrack(); });
     safe('legend', renderLegend); safe('stats', renderSelStats); safe('laps', renderLaps); safe('summary', renderSummary); safe('quick', renderQuick);
+    widgetsUpdate('load');
   }
 
   // optional state in URL hash: #color=gct&layer=topo&sel=1996-2777 (moving seconds)&m=pace,hr
@@ -1220,6 +1239,28 @@
   $('resetSel').onclick = () => setSel(null, null, true);
   $('chartReset').onclick = () => setSel(null, null, true);
   $('fitBtn').onclick = () => fitMap();
+  // replay: move the position dot along the selection (or whole track) at a multiple of real time
+  let replay = null;
+  function stopReplay() { if (!replay) return; cancelAnimationFrame(replay.raf); replay = null; $('playBtn').textContent = '▶'; }
+  $('playSpeed').value = String(store.get('playSpeed', 60));
+  $('playSpeed').onchange = () => { store.set('playSpeed', +$('playSpeed').value); if (replay) replay.speed = +$('playSpeed').value; };
+  $('playBtn').onclick = () => {
+    if (replay) { stopReplay(); return; }
+    if (!A) return;
+    const [lo, hi] = selRange();
+    let i = S.hover != null && S.hover >= lo && S.hover < hi ? S.hover : lo, t = A.mt[i], last = performance.now();
+    $('playBtn').textContent = '⏸';
+    const step = (now) => {
+      if (!replay) return;
+      t += ((now - last) / 1000) * replay.speed; last = now;
+      while (i < hi && A.mt[i + 1] <= t) i++;
+      setHover(i, 'replay');
+      if (S.follow && map && A.hasGps && !map.getBounds().pad(-0.15).contains([A.lat[i], A.lon[i]])) map.panTo([A.lat[i], A.lon[i]], { animate: false });
+      if (i >= hi) { stopReplay(); return; }
+      replay.raf = requestAnimationFrame(step);
+    };
+    replay = { speed: +$('playSpeed').value, raf: requestAnimationFrame(step) };
+  };
   // a setting that changes the computed data (units, smoothing) was changed: recompute from the parsed
   // file and redraw. Same records, so indices - and with them the current selection - stay valid.
   function reprocess() {
@@ -1230,6 +1271,7 @@
     const cb = $('colorBy'); cb.innerHTML = ''; for (const k of KEYS) if (A.has[k]) cb.add(new Option(METRICS[k].label, k)); cb.value = S.colorBy;
     safe('chart', () => { buildToggles(); buildChart(); });
     safe('map', drawTrack); safe('legend', renderLegend); safe('stats', renderSelStats); safe('laps', renderLaps); safe('summary', renderSummary); safe('quick', renderQuick);
+    widgetsUpdate('data');
   }
   // settings menu (gear, top right): theme and units
   $('setGear').onclick = (e) => { e.stopPropagation(); $('lapMenu').hidden = true; $('chartMenu').hidden = true; $('setMenu').hidden = !$('setMenu').hidden; };
@@ -1248,7 +1290,7 @@
   $('themeSel').value = store.get('theme', 'system');
   const themeChanged = () => {
     if (!A) return;
-    buildToggles(); buildChart(); renderSelStats(); renderLegend(); renderLaps(); renderSummary(); drawTrack();
+    buildToggles(); buildChart(); renderSelStats(); renderLegend(); renderLaps(); renderSummary(); drawTrack(); widgetsUpdate('theme');
   };
   $('themeSel').onchange = () => { store.set('theme', applyTheme($('themeSel').value)); themeChanged(); };
   // "System": follow the device when it switches between light and dark
@@ -1296,74 +1338,167 @@
     resize();
   }, () => store.set('chartH', S.chartH));
 
-  // keep info tooltips inside the viewport
-  document.querySelectorAll('.info').forEach((el) => {
-    const tip = el.querySelector('.tip');
-    const place = () => {
-      tip.style.left = '-8px';
-      const r = tip.getBoundingClientRect(), over = r.right - (window.innerWidth - 12);
-      if (over > 0) tip.style.left = Math.round(-8 - over) + 'px';
-    };
-    el.addEventListener('mouseenter', place); el.addEventListener('focus', place);
-  });
-
-  // collapsible panels (state saved per panel)
+  // ---------- panels and widgets ----------
+  // Every panel is a .card in one of the two columns. The six original panels are static HTML
+  // ("built-ins", can be switched off); add-on widgets are registered by src/widgets.js and get
+  // their card created on demand. Which ones are shown, their options, order and collapsed state
+  // are all saved in the browser.
+  const cols = [$('colL'), $('colR')];
   const folded = store.get('folded', {});
-  document.querySelectorAll('.card').forEach((card) => {
-    const btn = card.querySelector('.fold'); if (!btn) return;
-    const set = (v) => { card.classList.toggle('collapsed', v); btn.textContent = v ? '▸' : '▾'; };
-    set(!!folded[card.id]);
-    btn.onclick = () => {
-      const v = !card.classList.contains('collapsed'); set(v);
-      if (v) folded[card.id] = true; else delete folded[card.id];
-      store.set('folded', folded);
-      if (!v) setTimeout(() => { resize(); if (map) map.invalidateSize(); }, 30);
-    };
-  });
+  const BUILTIN = { chartCard: 'Chart', mapCard: 'Map', legendCard: 'Legend', selCard: 'Selection stats', lapsCard: 'Laps', summaryCard: 'Summary' };
+  const WDEF = {};                                   // add-on widget types: type -> definition
+  const WLIVE = {};                                  // card id -> { type, card, inst, dirty }
+  const WST = Object.assign({ off: {}, cards: [] }, store.get('widgets', {})); // off: hidden built-ins; cards: [{ id, type, opts }]
+  const saveW = () => store.set('widgets', WST);
+  const saveOrder = () => store.set('order', cols.map((c) => Array.from(c.children).map((x) => x.id)));
+  let dragCard = null;
+
+  function initCard(card) {
+    const btn = card.querySelector('.fold');
+    if (btn) {
+      const set = (v) => { card.classList.toggle('collapsed', v); btn.textContent = v ? '▸' : '▾'; };
+      set(!!folded[card.id]);
+      btn.onclick = () => {
+        const v = !card.classList.contains('collapsed'); set(v);
+        if (v) folded[card.id] = true; else delete folded[card.id];
+        store.set('folded', folded);
+        if (!v) setTimeout(() => { resize(); if (map) map.invalidateSize(); const w = WLIVE[card.id]; if (w && w.dirty) widgetRun(w, 'load'); }, 30);
+      };
+    }
+    card.querySelectorAll('.info').forEach((el) => { // keep info tooltips inside the viewport
+      const tip = el.querySelector('.tip');
+      const place = () => { tip.style.left = '-8px'; const r = tip.getBoundingClientRect(), over = r.right - (window.innerWidth - 12); if (over > 0) tip.style.left = Math.round(-8 - over) + 'px'; };
+      el.addEventListener('mouseenter', place); el.addEventListener('focus', place);
+    });
+    card.querySelectorAll('.grip').forEach((g) => {
+      g.draggable = true;
+      g.addEventListener('dragstart', (e) => {
+        dragCard = g.closest('.card'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragCard.id);
+        e.dataTransfer.setDragImage(dragCard, 16, 16);
+        const c = dragCard; setTimeout(() => c.classList.add('dragging'), 0);
+      });
+      g.addEventListener('dragend', () => {
+        if (!dragCard) return;
+        dragCard.classList.remove('dragging'); dragCard = null; saveOrder();
+        if (map) map.invalidateSize();
+      });
+    });
+  }
+  document.querySelectorAll('.card').forEach(initCard);
+  document.querySelectorAll('header .info').forEach((el) => el);
   $('selDetails').open = store.get('selDetails', false);
   $('selDetails').addEventListener('toggle', () => store.set('selDetails', $('selDetails').open));
 
-  const cols = [$('colL'), $('colR')];
   const DEFAULT_ORDER = cols.map((c) => Array.from(c.children).map((x) => x.id));
   function applyOrder(order) {
     order.forEach((ids, ci) => ids.forEach((id) => { const el = $(id); if (el && el.classList.contains('card')) cols[ci].appendChild(el); }));
   }
-  const savedOrder = store.get('order', null);
-  if (Array.isArray(savedOrder) && savedOrder.length === 2) applyOrder(savedOrder);
-  let dragCard = null;
-  document.querySelectorAll('.grip').forEach((g) => {
-    g.draggable = true;
-    g.addEventListener('dragstart', (e) => {
-      dragCard = g.closest('.card'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragCard.id);
-      e.dataTransfer.setDragImage(dragCard, 16, 16);
-      const c = dragCard; setTimeout(() => c.classList.add('dragging'), 0);
-    });
-    g.addEventListener('dragend', () => {
-      if (!dragCard) return;
-      dragCard.classList.remove('dragging'); dragCard = null;
-      store.set('order', cols.map((c) => Array.from(c.children).map((x) => x.id)));
-      if (map) map.invalidateSize();
-    });
-  });
+  const applySavedOrder = () => { const o = store.get('order', null); if (Array.isArray(o) && o.length === 2) applyOrder(o); };
+  applySavedOrder();
   cols.forEach((col) => {
     col.addEventListener('dragover', (e) => {
       if (!dragCard) return;
       e.preventDefault(); e.dataTransfer.dropEffect = 'move';
-      const cards = Array.from(col.children).filter((c) => c !== dragCard);
+      const cards = Array.from(col.children).filter((c) => c !== dragCard && !c.classList.contains('woff') && !c.hidden);
       const after = cards.find((c) => { const r = c.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
       if (after) { if (after.previousElementSibling !== dragCard) col.insertBefore(dragCard, after); }
       else if (col.lastElementChild !== dragCard) col.appendChild(dragCard);
     });
     col.addEventListener('drop', (e) => { if (dragCard) e.preventDefault(); });
   });
+
+  // built-ins: switched off = hidden with a class (their own data-dependent [hidden] logic stays untouched)
+  function applyBuiltins() {
+    for (const id in BUILTIN) $(id).classList.toggle('woff', !!WST.off[id]);
+    setTimeout(() => { resize(); if (map) map.invalidateSize(); }, 30);
+  }
+  applyBuiltins();
+
+  function widgetRun(w, reason) {
+    if (!A || !w.inst) return;
+    if (w.card.classList.contains('collapsed') || w.card.classList.contains('woff')) { w.dirty = true; return; }
+    const def = WDEF[w.type], ok = !def.available || def.available(A);
+    w.card.querySelector('.wna').hidden = ok; w.card.querySelector('.wbody').hidden = !ok;
+    if (!ok) return;
+    w.dirty = false;
+    try { w.inst.update(reason); } catch (e) { console.error('widget ' + w.type, e); }
+  }
+  function widgetsUpdate(reason) { for (const id in WLIVE) widgetRun(WLIVE[id], reason); }
+
+  function mountWidget(rec, colIdx) {
+    const def = WDEF[rec.type]; if (!def || WLIVE[rec.id]) return;
+    const card = document.createElement('div'); card.className = 'card'; card.id = rec.id;
+    card.innerHTML = `<div class="hd"><span class="grip" title="Drag to move this panel">⠿</span><h3>${def.title}</h3><span class="info" tabindex="0">i<span class="tip"><span class="tb">${def.tip || ''}</span></span></span><span class="wctl"></span><span class="sp"></span>` +
+      '<button class="iconbtn wclose" title="Remove this widget (add it again from the Widgets menu)" aria-label="Remove widget">×</button><button class="fold" title="Collapse / expand panel" aria-label="Collapse or expand panel">▾</button></div>' +
+      '<div class="wna muted small" hidden>Not available: this file does not contain the data this widget needs.</div><div class="wbody"></div>';
+    cols[colIdx == null ? (def.col === 'R' ? 1 : 0) : colIdx].appendChild(card);
+    initCard(card);
+    const w = WLIVE[rec.id] = { type: rec.type, card, inst: null, dirty: true };
+    card.querySelector('.wclose').onclick = () => removeWidget(rec.id);
+    rec.opts = rec.opts || {};
+    try { w.inst = def.create({ card, body: card.querySelector('.wbody'), ctl: card.querySelector('.wctl'), opts: rec.opts, save: saveW, title: (t) => { card.querySelector('h3').textContent = t; } }); }
+    catch (e) { console.error('widget ' + rec.type, e); }
+    widgetRun(w, 'load');
+  }
+  function addWidget(type) {
+    const def = WDEF[type]; if (!def) return;
+    if (!def.multi) { const ex = WST.cards.find((c) => c.type === type); if (ex) { removeWidget(ex.id); return; } }
+    let n = 1; while (WST.cards.some((c) => c.id === 'w_' + type + '_' + n)) n++;
+    const rec = { id: 'w_' + type + '_' + n, type, opts: {} };
+    WST.cards.push(rec); saveW(); mountWidget(rec); saveOrder(); renderWidgetMenu();
+    WLIVE[rec.id].card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  function removeWidget(id) {
+    const w = WLIVE[id];
+    if (w) { try { if (w.inst && w.inst.destroy) w.inst.destroy(); } catch (e) { /* ignore */ } w.card.remove(); delete WLIVE[id]; }
+    WST.cards = WST.cards.filter((c) => c.id !== id); delete folded[id]; store.set('folded', folded);
+    saveW(); saveOrder(); renderWidgetMenu();
+  }
+  function renderWidgetMenu() {
+    let h = '<div class="mh">Panels</div>';
+    for (const id in BUILTIN) h += `<label title="Show or hide the ${BUILTIN[id]} panel"><input type="checkbox" data-builtin="${id}" ${WST.off[id] ? '' : 'checked'}> ${BUILTIN[id]}</label>`;
+    const types = Object.keys(WDEF);
+    if (types.length) h += '<div class="mh">Add-ons</div>';
+    for (const t of types) {
+      const def = WDEF[t], na = A && def.available && !def.available(A), cnt = WST.cards.filter((c) => c.type === t).length;
+      const tip = (def.tip || '').replace(/<[^>]*>/g, ' ').replace(/"/g, '&quot;') + (na ? ' — not available for the loaded file.' : '');
+      h += def.multi
+        ? `<button class="btn small wadd${na ? ' na' : ''}" data-add="${t}" title="${tip}">＋ ${def.title}${cnt ? ` <span class="muted">(${cnt})</span>` : ''}</button>`
+        : `<label class="${na ? 'na' : ''}" title="${tip}"><input type="checkbox" data-add="${t}" ${cnt ? 'checked' : ''}> ${def.title}</label>`;
+    }
+    $('widgetMenu').innerHTML = h;
+  }
+  $('widgetBtn').onclick = (e) => { e.stopPropagation(); ['lapMenu', 'chartMenu', 'setMenu'].forEach((m) => { $(m).hidden = true; }); renderWidgetMenu(); $('widgetMenu').hidden = !$('widgetMenu').hidden; };
+  $('widgetMenu').addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('button[data-add]'); if (b) addWidget(b.dataset.add); });
+  $('widgetMenu').addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.builtin) { if (t.checked) delete WST.off[t.dataset.builtin]; else WST.off[t.dataset.builtin] = true; saveW(); applyBuiltins(); }
+    else if (t.dataset.add) addWidget(t.dataset.add);
+  });
+  document.addEventListener('click', () => { $('widgetMenu').hidden = true; });
+
   $('resetLayout').onclick = () => {
-    ['rw', 'mapH', 'chartH', 'order', 'folded'].forEach((k) => store.del(k));
+    ['rw', 'mapH', 'chartH', 'order', 'folded', 'widgets'].forEach((k) => store.del(k));
     for (const k in folded) delete folded[k];
+    Object.keys(WLIVE).forEach((id) => { const w = WLIVE[id]; try { if (w.inst && w.inst.destroy) w.inst.destroy(); } catch (e) { /* ignore */ } w.card.remove(); delete WLIVE[id]; });
+    WST.off = {}; WST.cards = []; applyBuiltins(); renderWidgetMenu();
     document.querySelectorAll('.card.collapsed').forEach((c) => { c.classList.remove('collapsed'); c.querySelector('.fold').textContent = '▾'; });
     $('app').style.removeProperty('--rw'); $('map').style.height = ''; S.chartH = 300;
     applyOrder(DEFAULT_ORDER); resize();
     setTimeout(() => { if (map) { map.invalidateSize(); fitMap(); } }, 60);
   };
+
+  // API for src/widgets.js (and nothing else): read-only access to the loaded activity and the linking functions
+  window.FFP = {
+    get A() { return A; }, S, METRICS, KEYS, UN, U, LAYERS, store, cssVar,
+    fmtDur, fmtPace, fx, quantile, roll, descOf, spd, paceOf, elevOf, PACE,
+    colorOf, isZones, stats, selRange, activeSel, setSel, setHover, fitMap, posLabel,
+    getMap: () => map,
+    registerWidget(type, def) { WDEF[type] = def; },
+    // called once by widgets.js after it registered everything: create the saved cards and restore their places
+    widgetsReady() { WST.cards = WST.cards.filter((c) => WDEF[c.type]); WST.cards.forEach((c) => mountWidget(c)); applySavedOrder(); renderWidgetMenu(); },
+  };
+
   if (window.ResizeObserver) {
     let rz = 0, lastW = 0;
     new ResizeObserver(() => { const w = $('chart').clientWidth; if (w === lastW) return; lastW = w; clearTimeout(rz); rz = setTimeout(resize, 30); }).observe($('chart'));
