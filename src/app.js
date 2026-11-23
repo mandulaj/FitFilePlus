@@ -1,4 +1,4 @@
-/* FitFilePlus UI. Depends on globals: L (Leaflet), uPlot, parseFit. */
+/* FitFilePlus UI. Depends on globals: L (Leaflet), uPlot, parseFit, parseActivityText. */
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -29,14 +29,19 @@
     return `${Math.floor(s / 60)}'${pad(s % 60)}"`;
   }
   const fx = (d) => (v) => (v == null || !isFinite(v) ? '–' : v.toFixed(d));
-  const speedToPace = (v) => (v != null && v > 0.5 ? 1000 / v : null);
 
   // ---------- colours ----------
   const C = { purple: '#a855f7', blue: '#3b82f6', green: '#22c55e', orange: '#f59e0b', red: '#ef4444', grey: '#8a8f9c' };
   // relative colour scales; plasma has no greens so it stays readable over forest/terrain map colours
   const PALETTES = { plasma: ['#2c0594', '#7e03a8', '#cc4778', '#f89540', '#f0f921'], viridis: ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'] };
   let SEQ = PALETTES[store.get('palette', 'plasma')] || PALETTES.plasma;
-  const DIV = ['#2166ac', '#67a9cf', '#b8b8b8', '#ef8a62', '#b2182b'];
+  // gradient (grade) colour scales, downhill -> flat -> uphill
+  const GRADE_PALS = {
+    rwg: { name: 'Red / green', stops: ['#16a34a', '#4ade80', '#f3edc0', '#f08a6c', '#dc2626'] },
+    rwb: { name: 'Red / blue', stops: ['#2166ac', '#67a9cf', '#eeeeee', '#ef8a62', '#b2182b'] },
+    plasma: { name: 'Plasma', stops: ['#2c0594', '#7e03a8', '#cc4778', '#f89540', '#f0f921'] },
+  };
+  let DIV = (GRADE_PALS[store.get('gradePal', 'rwg')] || GRADE_PALS.rwg).stops;
   function lerpStops(stops, t) {
     t = Math.max(0, Math.min(1, t));
     const x = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
@@ -79,7 +84,123 @@
     alt: { label: 'Elevation', unit: 'm', color: '#38bdf8', fmt: fx(0), seq: true, fill: true },
     grade: { label: 'Grade', unit: '%', color: '#94a3b8', fmt: fx(1), div: [-12, 12] },
   };
+  // one-line explanations shown when hovering a metric button
+  const DESC = {
+    pace: 'How fast you are moving, shown as pace (time per km or mile; lower = faster) or as speed, depending on the sport and settings.',
+    effort: 'Pace adjusted for hills: the flat-ground pace that would cost the same effort. Recorded by some watches.',
+    hr: 'Heart beats per minute.',
+    power: 'Mechanical power in watts: estimated by the watch when running, measured by a power meter when cycling.',
+    cadence: 'Steps per minute when running or walking, pedal revolutions per minute when cycling.',
+    gct: 'How long each foot stays on the ground per step. Shorter usually goes with faster, more economical running.',
+    balance: 'Share of ground contact time spent on the left foot. 50% is perfectly symmetric.',
+    vo: 'Vertical oscillation: how far the body bounces up and down with each step. Less bounce wastes less energy.',
+    vr: 'Stride height divided by stride length (vertical ratio). Lower means more of each step goes forward rather than up.',
+    stride: 'Distance covered by one step.',
+    lss: 'Leg modelled as a spring: higher = stiffer leg returning more energy per step. Recorded during running form tests.',
+    temp: 'Temperature measured at the watch; skin warmth usually makes it read above air temperature.',
+    alt: 'Height above sea level.',
+    grade: 'Slope of the ground, computed from elevation over distance. Positive = uphill, negative = downhill.',
+    // extra metrics picked up from the file
+    gps_accuracy: 'Position error estimated by the GPS receiver. Lower is better; high values mean the track and pace are less trustworthy there.',
+    respiration: 'Breaths per minute.',
+    core_temp: 'Body core temperature from a dedicated sensor.',
+    smo2: 'Oxygen saturation of the working muscle, from a muscle-oxygen sensor. Drops when the muscle uses oxygen faster than it is delivered.',
+    thb: 'Total haemoglobin concentration in the muscle, from a muscle-oxygen sensor; follows blood volume under the sensor.',
+    vertical_speed: 'Rate of climbing or descending.',
+    stance_pct: 'Share of each step cycle spent on the ground.',
+    power_balance: 'Share of cycling power produced by the left leg. 50% is symmetric.',
+    torque_eff_l: 'Left leg: how much of the pedal force pushes the crank forward rather than against it.',
+    torque_eff_r: 'Right leg: how much of the pedal force pushes the crank forward rather than against it.',
+    pedal_smooth_l: 'Left leg: how evenly power is applied around the pedal stroke.',
+    pedal_smooth_r: 'Right leg: how evenly power is applied around the pedal stroke.',
+    pedal_smooth: 'How evenly power is applied around the pedal stroke (both legs).',
+    pco_l: 'Left pedal: where on the pedal platform force is applied, relative to its centre.',
+    pco_r: 'Right pedal: where on the pedal platform force is applied, relative to its centre.',
+    battery: 'Battery charge of the device or bike.',
+    motor_power: 'Power delivered by the e-bike motor.',
+    ebike_range: 'Remaining range estimated by the e-bike.', ebike_battery: 'E-bike battery charge.', ebike_assist: 'Level of motor assistance.',
+    pressure: 'Barometric air pressure at the device.',
+    depth: 'Depth below the water surface.', ascent_rate: 'Rate of ascent while diving.',
+    cns_load: 'Central nervous system oxygen toxicity load (diving).', n2_load: 'Nitrogen tissue loading (diving).', po2: 'Partial pressure of oxygen in the breathing gas (diving).',
+    pressure_sac: 'Surface air consumption as pressure drop per minute (diving).', volume_sac: 'Surface air consumption as gas volume per minute (diving).', rmv: 'Respiratory minute volume (diving).',
+    grit: 'Mountain-bike trail difficulty score from GPS, elevation and motion.', flow: 'Mountain-bike score for how smoothly speed is kept through the trail. Lower is smoother.',
+    stress: 'Stress score estimated by the watch from heart-rate variability.',
+    dev_grade: 'Slope as computed by the recording device.', resistance: 'Trainer resistance level.', cycle_length: 'Distance per stroke or cycle.', ball_speed: 'Speed of the ball.',
+  };
+  const descOf = (k) => { const m = METRICS[k]; return DESC[k] || (m.unknown ? 'In the file, but not part of the documented FIT profile: meaning and unit unknown.' : k.indexOf('dev_') === 0 ? 'Custom field defined by a watch app or connected sensor; name and unit as declared in the file.' : m.dynamic ? 'Extra value found in this file.' : ''); };
   const KEYS = Object.keys(METRICS);
+  // themes: line colours tuned for dark backgrounds get darker counterparts on the light theme
+  const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const DARK_COLORS = {}; for (const k of KEYS) DARK_COLORS[k] = METRICS[k].color;
+  const LIGHT_COLORS = { pace: '#16a34a', effort: '#0284c7', hr: '#dc2626', power: '#9333ea', cadence: '#ea580c', gct: '#b98a00', balance: '#5f9a0c', vo: '#0d9488', vr: '#059669', stride: '#db2777', lss: '#c026d3', temp: '#c2410c', alt: '#0284c7', grade: '#64748b' };
+  const lightMQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+  function applyTheme(name) {
+    if (!['system', 'dark', 'black', 'light'].includes(name)) name = 'system';
+    const eff = name === 'system' ? (lightMQ && lightMQ.matches ? 'light' : 'dark') : name;
+    if (eff === 'dark') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = eff;
+    for (const k of KEYS) METRICS[k].color = (eff === 'light' && LIGHT_COLORS[k]) || DARK_COLORS[k];
+    return name;
+  }
+  applyTheme(store.get('theme', 'system'));
+
+  // ---------- extra metrics discovered in the loaded file ----------
+  // Parsers report any further series they found (fit.extras + record.x). Each usable one becomes a
+  // regular metric for as long as that file is loaded: chart line, map colour, legend, stats.
+  const X_DARK = ['#fda4af', '#67e8f9', '#d9f99d', '#c4b5fd', '#fcd34d', '#f0abfc', '#5eead4', '#fdba74'];
+  const X_LIGHT = ['#be123c', '#0e7490', '#4d7c0f', '#6d28d9', '#b45309', '#a21caf', '#0f766e', '#c2410c'];
+  function registerExtras(fit) {
+    for (let i = KEYS.length - 1; i >= 0; i--) if (METRICS[KEYS[i]].dynamic) { delete DARK_COLORS[KEYS[i]]; delete LIGHT_COLORS[KEYS[i]]; delete METRICS[KEYS[i]]; KEYS.splice(i, 1); }
+    const light = document.documentElement.dataset.theme === 'light';
+    let n = 0;
+    for (const e of fit.extras || []) {
+      if (METRICS[e.key] || (e.unknown && !S.showUnknown)) continue;
+      // usable = enough samples, actually varies, and is not a running total
+      let cnt = 0, mn = Infinity, mx = -Infinity, prev = null, drops = 0;
+      for (const r of fit.records) {
+        const v = r.x ? r.x[e.key] : null; if (v == null) continue;
+        cnt++; if (v < mn) mn = v; if (v > mx) mx = v;
+        if (prev != null && v < prev) drops++; prev = v;
+      }
+      if (cnt < 20 || mx === mn) continue;
+      if (drops === 0 && cnt > 50) continue; // never decreases: cumulative counter
+      const span = mx - mn, dec = span >= 50 ? 0 : span >= 5 ? 1 : 2;
+      DARK_COLORS[e.key] = X_DARK[n % X_DARK.length]; LIGHT_COLORS[e.key] = X_LIGHT[n % X_LIGHT.length]; n++;
+      METRICS[e.key] = { label: e.label, unit: e.unit || '', fmt: fx(dec), seq: true, dynamic: true, unknown: e.unknown, color: light ? LIGHT_COLORS[e.key] : DARK_COLORS[e.key],
+        note: e.unknown ? 'Unidentified field: present in the file but not part of the documented FIT profile, so its meaning and unit are unknown.' : 'Found in this file and shown as recorded (no unit conversion).' };
+      KEYS.push(e.key);
+    }
+  }
+
+  // ---------- units ----------
+  // Data arrays are converted to the display unit when a file is processed, so charts, stats and
+  // colour scales all work in what the user sees. Changing units re-processes the loaded activity.
+  const U = (function () {
+    const st = store.get('units', {});
+    return { imp: !!st.imp, mode: st.mode || (st.speed === true ? 'speed' : 'auto'), speed: false, sport: null };
+  })();
+  // sports where speed is the natural reading (FIT sport ids: cycling, skiing, e-bike, motor, sailing, skating, board sports, ...); all others use pace
+  const SPEED_SPORTS = new Set([2, 13, 14, 20, 21, 22, 23, 24, 26, 30, 32, 33, 34, 36, 38, 39, 40, 42, 43, 44, 76, 77, 81]);
+  const SPORT_NAMES = { 1: 'Run', 2: 'Ride', 5: 'Swim', 11: 'Walk', 12: 'Cross-country ski', 13: 'Ski', 14: 'Snowboard', 15: 'Row', 16: 'Mountaineering', 17: 'Hike', 19: 'Paddle', 21: 'E-bike ride',
+    30: 'Inline skate', 31: 'Climb', 32: 'Sail', 33: 'Ice skate', 35: 'Snowshoe', 37: 'Stand-up paddle', 38: 'Surf', 41: 'Kayak', 43: 'Windsurf', 44: 'Kitesurf', 53: 'Dive' };
+  const saveUnits = () => store.set('units', { imp: U.imp, mode: U.mode });
+  // "auto" follows the sport of the loaded activity
+  function resolveSpeed(sport) { if (sport !== undefined) U.sport = sport; U.speed = U.mode === 'speed' || (U.mode === 'auto' && SPEED_SPORTS.has(U.sport)); }
+  resolveSpeed();
+  const UN = { DM: 1000, du: 'km', EF: 1, eu: 'm', tu: '°C' }; // metres per distance unit, labels, elevation factor
+  function applyUnits() {
+    UN.DM = U.imp ? 1609.344 : 1000; UN.du = U.imp ? 'mi' : 'km';
+    UN.EF = U.imp ? 3.28084 : 1; UN.eu = U.imp ? 'ft' : 'm'; UN.tu = U.imp ? '°F' : '°C';
+    const pu = U.speed ? (U.imp ? 'mph' : 'km/h') : '/' + UN.du;
+    for (const [k, base] of [['pace', 'Pace'], ['effort', 'Effort Pace']])
+      Object.assign(METRICS[k], { label: U.speed ? base.replace('Pace', 'Speed') : base, unit: pu, fmt: U.speed ? fx(1) : fmtPace, dir: U.speed ? 1 : -1, rev: !U.speed });
+    METRICS.alt.unit = UN.eu; METRICS.temp.unit = UN.tu;
+  }
+  applyUnits();
+  const spd = (v) => (v != null && v > 0.5 ? (U.speed ? (v * 3600) / UN.DM : UN.DM / v) : null);             // m/s -> pace or speed
+  const paceOf = (sec, units) => (sec > 0 && units > 0 ? (U.speed ? (units / sec) * 3600 : sec / units) : null); // time + distance -> pace or speed
+  const tempOf = (c) => (c == null ? null : U.imp ? (c * 9) / 5 + 32 : c);
+  const elevOf = (m) => (m == null ? null : m * UN.EF);
+  const PACE = () => (U.speed ? 'Speed' : 'Pace');
   const DEFAULT_EDGES = {};
   for (const k of KEYS) if (METRICS[k].bands) DEFAULT_EDGES[k] = METRICS[k].bands.edges.slice();
   const savedEdges = store.get('edges', {});
@@ -112,6 +233,9 @@
     layer: store.get('layer', 'topo'),
     follow: store.get('follow', true),
     chartColors: store.get('chartColors', false),
+    gradeFill: store.get('gradeFill', true),
+    smoothSec: store.get('smoothSec', 5),
+    showUnknown: store.get('showUnknown', false),
     lineW: store.get('lineW', 6),
     preview: null,
     chartH: store.get('chartH', 300),
@@ -162,7 +286,7 @@
         r.dist = acc;
       }
     }
-    if (!R.some((r) => r.speed != null) && R.some((r) => r.dist > 0)) { // no speed field: differentiate distance
+    if (!fit.noTime && !R.some((r) => r.speed != null) && R.some((r) => r.dist > 0)) { // no speed field: differentiate distance
       for (let i = 0; i < n; i++) {
         const a = Math.max(0, i - 3), b = Math.min(n - 1, i + 3), dt = (R[b].t - R[a].t) / 1000;
         if (R[a].dist != null && R[b].dist != null && dt > 0 && dt < 60) R[i].speed = (R[b].dist - R[a].dist) / dt;
@@ -177,7 +301,7 @@
       if (i) { const dt = (R[i].t - R[i - 1].t) / 1000; m += dt > gap ? step : dt; }
       mt[i] = m;
       if (R[i].dist != null && R[i].dist > d) d = R[i].dist;
-      km[i] = d / 1000;
+      km[i] = d / UN.DM;
     }
     const pauses = [];
     for (let i = 0; i < n - 1; i++) { const dt = (R[i + 1].t - R[i].t) / 1000; if (dt > gap) pauses.push({ i, dur: dt }); }
@@ -185,12 +309,14 @@
     { let c = 0, q = 0; for (let i = 0; i < n; i++) { pc[i] = c; if (q < pauses.length && pauses[q].i === i) { c++; q++; } } }
     const raw = {};
     const col = (f) => R.map((r) => { const v = f(r); return v == null || !isFinite(v) ? null : v; });
-    raw.pace = col((r) => speedToPace(r.speed));
-    raw.effort = col((r) => speedToPace(r.effort));
+    raw.pace = col((r) => spd(r.speed));
+    raw.effort = col((r) => spd(r.effort));
     for (const k of ['hr', 'power', 'cadence', 'gct', 'balance', 'vo', 'vr', 'stride', 'lss', 'temp', 'alt']) raw[k] = col((r) => r[k]);
+    const XK = KEYS.filter((k) => METRICS[k].dynamic);
+    for (const k of XK) raw[k] = col((r) => (r.x ? r.x[k] : null));
     for (const k of ['cadence', 'gct', 'balance', 'vo', 'vr', 'stride', 'power', 'lss', 'hr']) raw[k] = raw[k].map((v) => (v === 0 ? null : v));
     // fields logged less often than the record rate (e.g. cadence every 2nd second): bridge gaps of up to 6 s
-    for (const k of ['hr', 'power', 'cadence', 'gct', 'balance', 'vo', 'vr', 'stride', 'lss', 'alt', 'pace', 'effort']) {
+    for (const k of ['hr', 'power', 'cadence', 'gct', 'balance', 'vo', 'vr', 'stride', 'lss', 'alt', 'pace', 'effort'].concat(XK)) {
       const a = raw[k]; let li = -1;
       for (let i = 0; i < n; i++) {
         if (a[i] == null) continue;
@@ -198,18 +324,23 @@
         li = i;
       }
     }
-    { let last = null; raw.temp = raw.temp.map((v) => (v != null ? (last = v) : last)); } // temperature is logged sparsely: carry forward
+    { let last = null; raw.temp = raw.temp.map((v) => tempOf(v != null ? (last = v) : last)); } // temperature is logged sparsely: carry forward
     // grade over a ~±15-sample window
-    const altS = roll(raw.alt, 7, false);
-    raw.grade = altS.map((_, i) => {
-      const a = Math.max(0, i - 15), b = Math.min(n - 1, i + 15), dd = (km[b] - km[a]) * 1000;
+    const altSm = roll(raw.alt, 7, false); // metres; grade is unit-independent
+    raw.grade = altSm.map((_, i) => { const altS = altSm;
+      const a = Math.max(0, i - 15), b = Math.min(n - 1, i + 15), dd = (km[b] - km[a]) * UN.DM;
       return altS[a] != null && altS[b] != null && dd > 15 ? ((altS[b] - altS[a]) / dd) * 100 : null;
     });
+    raw.alt = raw.alt.map(elevOf);
+    const altS = altSm.map(elevOf);
     const has = {}, chart = {}, smooth = {}, dom = {}, rng = {};
     for (const k of KEYS) {
       has[k] = raw[k].some((v) => v != null);
-      chart[k] = k === 'alt' || k === 'grade' ? raw[k] : roll(raw[k], 2, false);
-      smooth[k] = k === 'grade' ? raw[k] : roll(raw[k], 5, true);
+      // smoothing window (seconds, user setting) -> half-width in samples. Chart: rolling mean.
+      // Map colours: 11-sample median to kill single-sample flicker, then the same mean when it is wider.
+      const hs = S.smoothSec > 0 ? Math.max(1, Math.round(S.smoothSec / step / 2)) : 0;
+      chart[k] = k === 'alt' || k === 'grade' || !hs ? raw[k] : roll(raw[k], hs, false);
+      smooth[k] = k === 'grade' ? raw[k] : !hs ? roll(raw[k], 1, true) : hs > 5 ? roll(roll(raw[k], 5, true), hs, false) : roll(raw[k], 5, true);
       dom[k] = [quantile(smooth[k], 0.05), quantile(smooth[k], 0.95)];
       const lo = quantile(chart[k], 0.005), hi = quantile(chart[k], 0.995), p = ((hi - lo) || 1) * 0.08;
       rng[k] = [lo - p, hi + p];
@@ -244,7 +375,7 @@
     let lapBest = null, lapWorst = null;
     laps.forEach((l, i) => {
       if (!l.dist || !l.timer || l.dist < maxLapDist * 0.5) return;
-      const pc = l.timer / (l.dist / 1000);
+      const pc = l.timer / (l.dist / UN.DM); // seconds per distance unit: lower = faster
       if (!lapBest || pc < lapBest.pace) lapBest = { lap: i, lo: l.lo, hi: l.hi, pace: pc };
       if (!lapWorst || pc > lapWorst.pace) lapWorst = { lap: i, lo: l.lo, hi: l.hi, pace: pc };
     });
@@ -257,7 +388,10 @@
         if (kmWorst == null || tt > kmWorst.pace) kmWorst = { lo: i, hi: j, pace: tt };
       }
     }
-    return { fit, fileName, n, R, et, mt, km, raw, chart, smooth, dom, rng, has, lat, lon, hasGps, laps, bestKm: best, altS, pauses, pc, foot, hasDist, kmBest, kmWorst, lapBest, lapWorst };
+    if (U.speed) { for (const r of [lapBest, lapWorst, kmBest, kmWorst]) if (r) r.pace = 3600 / r.pace; if (best) best = 3600 / best; }
+    const noTime = !!fit.noTime; // track without timestamps (plain KML / GPX route): no pace, no durations
+    if (noTime) { best = null; kmBest = kmWorst = null; }
+    return { fit, fileName, noTime, n, R, et, mt, km, raw, chart, smooth, dom, rng, has, lat, lon, hasGps, laps, bestKm: best, altS, pauses, pc, foot, hasDist, kmBest, kmWorst, lapBest, lapWorst };
   }
 
   function stats(lo, hi) {
@@ -268,10 +402,10 @@
       out.m[k] = c ? { avg: s / c, min: mn, max: mx } : null;
     }
     // pace averages via speed, not mean of pace
-    if (out.dist > 0.01 && out.m.pace) out.m.pace.avg = out.dur / out.dist;
-    if (out.m.effort) { let s = 0, c = 0; for (let i = lo; i <= hi; i++) { const v = A.R[i].effort; if (v != null && v > 0.5) { s += v; c++; } } if (c) out.m.effort.avg = 1000 / (s / c); }
+    if (out.dist > 0.01 && out.m.pace) out.m.pace.avg = paceOf(out.dur, out.dist);
+    if (out.m.effort) { let s = 0, c = 0; for (let i = lo; i <= hi; i++) { const v = A.R[i].effort; if (v != null && v > 0.5) { s += v; c++; } } if (c) out.m.effort.avg = spd(s / c); }
     let up = 0, down = 0, ref = null;
-    for (let i = lo; i <= hi; i++) { const a = A.altS[i]; if (a == null) continue; if (ref == null) ref = a; const dd = a - ref; if (dd >= 1) { up += dd; ref = a; } else if (dd <= -1) { down -= dd; ref = a; } }
+    for (let i = lo; i <= hi; i++) { const a = A.altS[i]; if (a == null) continue; if (ref == null) ref = a; const dd = a - ref; if (dd >= UN.EF) { up += dd; ref = a; } else if (dd <= -UN.EF) { down -= dd; ref = a; } }
     out.up = up; out.down = down;
     return out;
   }
@@ -282,7 +416,7 @@
   // ---------- chart ----------
   let plot = null, ov = null, syncing = false, chartHot = false;
   const xArr = () => A[S.xMode];
-  const fmtX = (v) => (S.xMode === 'km' ? v.toFixed(2) + ' km' : fmtDur(v));
+  const fmtX = (v) => (S.xMode === 'km' ? v.toFixed(2) + ' ' + UN.du : fmtDur(v));
 
   // metrics drawn in the chart: the chosen ones, plus the map's colour metric when "colours in chart" is on
   const chartMetrics = () => {
@@ -302,17 +436,63 @@
     return g;
   };
   // colour settings changed (metric, zones/continuous, palette, band edges): refresh everything that shows them
+  const gradeFillOn = () => S.gradeFill && A.has.alt && A.has.grade;
   function refreshColors() { drawTrack(); renderLegend(); if (S.chartColors && plot) { buildToggles(); buildChart(); } }
 
+  // ---------- hover help ----------
+  // One small card for the whole UI. Any element with a title / data-tip gets it (titles are moved to
+  // data-tip so the browser's own slow tooltip does not show as well); metric buttons get a richer card.
+  (function () {
+    const tip = document.createElement('div'); tip.id = 'chipTip'; tip.hidden = true; document.body.appendChild(tip);
+    let cur = null, timer = 0;
+    const hide = () => { clearTimeout(timer); cur = null; tip.hidden = true; };
+    const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const show = (el) => {
+      if (el.classList.contains('chip') && METRICS[el.dataset.key]) {
+        const m = METRICS[el.dataset.key], d = descOf(el.dataset.key);
+        tip.innerHTML = `<b>${m.label}</b>${m.unit ? ` <span class="muted">${m.unit}</span>` : ''}${d ? `<div>${d}</div>` : ''}<div class="muted hint">Click: show / hide · Double-click: only this one (again: restore)</div>`;
+      } else if (el.dataset.tip) tip.innerHTML = esc(el.dataset.tip);
+      else return;
+      tip.hidden = false;
+      const r = el.getBoundingClientRect(), w = tip.offsetWidth, hgt = tip.offsetHeight;
+      tip.style.left = Math.round(Math.max(8, Math.min(window.innerWidth - w - 8, r.left))) + 'px';
+      tip.style.top = Math.round(r.bottom + 6 + hgt > window.innerHeight - 4 ? Math.max(4, r.top - hgt - 6) : r.bottom + 6) + 'px';
+    };
+    document.addEventListener('mouseover', (e) => {
+      if (!e.target.closest) return;
+      if (e.target.closest('.leaflet-container')) { hide(); return; } // the map keeps its native tooltips
+      const el = e.target.closest('[title], [data-tip], .chip');
+      if (el && el.hasAttribute('title')) { if (el.getAttribute('title')) el.dataset.tip = el.getAttribute('title'); el.removeAttribute('title'); }
+      if (el === cur) return;
+      hide(); if (!el) return;
+      cur = el; timer = setTimeout(() => { if (cur === el && document.contains(el)) show(el); }, el.classList.contains('chip') ? 120 : 380);
+    });
+    document.addEventListener('mousedown', hide, true);
+    document.addEventListener('mouseleave', hide);
+    window.addEventListener('scroll', hide, true);
+  })();
+  let lastChip = null, isoPrev = null; // double-click tracking for the metric chips
   function buildToggles() {
     const box = $('metricToggles'); box.innerHTML = '';
+    let sepDone = false;
     for (const k of KEYS) {
       if (!A.has[k]) continue;
+      if (METRICS[k].dynamic && !sepDone) { sepDone = true; const sp = document.createElement('span'); sp.className = 'chipsep'; sp.title = 'Further metrics found in this file'; box.appendChild(sp); }
       const b = document.createElement('button');
       b.className = 'chip' + (chartMetrics().includes(k) ? ' on' : ''); b.style.setProperty('--c', METRICS[k].color);
       b.innerHTML = `<i></i>${METRICS[k].label}`; b.disabled = !A.has[k];
+      b.dataset.key = k;
       b.onclick = () => {
-        S.metrics = S.metrics.includes(k) ? S.metrics.filter((x) => x !== k) : S.metrics.concat(k);
+        const now = Date.now(), dbl = lastChip && lastChip.k === k && now - lastChip.t < 400;
+        if (dbl) { // second click of a double-click: isolate, or restore what was shown before isolating
+          const before = lastChip.before, alone = before.length === 1 && before[0] === k;
+          S.metrics = alone && isoPrev ? isoPrev : [k];
+          isoPrev = alone ? null : before;
+          lastChip = null;
+        } else {
+          lastChip = { k, t: now, before: S.metrics.slice() };
+          S.metrics = S.metrics.includes(k) ? S.metrics.filter((x) => x !== k) : S.metrics.concat(k);
+        }
         store.set('metrics', S.metrics); buildToggles(); buildChart();
       };
       box.appendChild(b);
@@ -340,15 +520,16 @@
     const act = chartMetrics();
     const x = xArr(), w = Math.max(300, $('chart').clientWidth);
     const xIncrs = S.xMode === 'km' ? [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50] : [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
-    const axisBase = { stroke: '#8e97b3', ticks: { stroke: '#2c3550', size: 4 }, font: '11px system-ui' };
+    const TH = { muted: cssVar('--muted'), line: cssVar('--line'), grid: cssVar('--grid'), text: cssVar('--text'), bg: cssVar('--bg') };
+    const axisBase = { stroke: TH.muted, ticks: { stroke: TH.line, size: 4 }, font: '11px system-ui' };
     const scales = { x: { time: false } }, series = [{}], data = [x];
-    const axes = [Object.assign({}, axisBase, { grid: { stroke: '#2c355066', width: 1 }, incrs: xIncrs, space: 90, values: (u, vals) => vals.map((v) => (S.xMode === 'km' ? +v.toFixed(2) + '' : fmtDur(v))) })];
+    const axes = [Object.assign({}, axisBase, { grid: { stroke: TH.grid, width: 1 }, incrs: xIncrs, space: 90, values: (u, vals) => vals.map((v) => (S.xMode === 'km' ? +v.toFixed(2) + '' : fmtDur(v))) })];
     act.forEach((k, i) => {
       const m = METRICS[k];
       scales[k] = { dir: m.dir || 1, range: () => A.rng[k] };
       const colored = S.chartColors && k === S.colorBy;
-      series.push({ label: m.label, scale: k, stroke: colored ? gradStroke(k) : m.color, width: colored ? 2.2 : 1.4, spanGaps: false, points: { show: false }, fill: m.fill ? m.color + '2e' : undefined });
-      axes.push(Object.assign({}, axisBase, { scale: k, side: i % 2 ? 1 : 3, stroke: m.color, size: 46, grid: { show: i === 0, stroke: '#2c355066', width: 1 }, values: (u, vals) => vals.map((v) => m.fmt(v)) }));
+      series.push({ label: m.label, scale: k, stroke: colored ? gradStroke(k) : m.color, width: colored ? 2.2 : 1.4, spanGaps: false, points: { show: false }, fill: m.fill ? (gradeFillOn() ? undefined : m.color + '2e') : undefined });
+      axes.push(Object.assign({}, axisBase, { scale: k, side: i % 2 ? 1 : 3, stroke: m.color, size: 46, grid: { show: i === 0, stroke: TH.grid, width: 1 }, values: (u, vals) => vals.map((v) => m.fmt(v)) }));
       data.push(A.chart[k]);
     });
     plot = new uPlot({
@@ -358,22 +539,37 @@
         setCursor: [(u) => { previewFromSelect(u); if (!syncing && chartHot) setHover(u.cursor.idx == null || u.cursor.left < 0 ? null : u.cursor.idx, 'chart'); }],
         setScale: [(u, key) => { if (key === 'x') onXScale(u.scales.x.min, u.scales.x.max); }],
         setSelect: [(u) => previewFromSelect(u)],
+        drawClear: [(u) => { // area under the elevation line, coloured by gradient
+          if (!gradeFillOn() || !u.scales.alt || u.scales.x.min == null) return;
+          const ctx = u.ctx, { left, top, width, height } = u.bbox, alt = A.chart.alt, gr = A.raw.grade, bottom = top + height;
+          const i0 = Math.max(0, u.valToIdx(u.scales.x.min) - 1), i1 = Math.min(A.n - 1, u.valToIdx(u.scales.x.max) + 1);
+          const step = Math.max(1, Math.floor((i1 - i0) / (width * 0.75))); // no more than ~1 strip per pixel
+          ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip(); ctx.globalAlpha = 0.72;
+          for (let i = i0; i < i1; i += step) {
+            const j = Math.min(i1, i + step);
+            if (alt[i] == null || alt[j] == null || (S.xMode === 'et' && A.pc[j] !== A.pc[i])) continue;
+            const xa = u.valToPos(x[i], 'x', true), xb = u.valToPos(x[j], 'x', true) + 0.7;
+            ctx.fillStyle = gr[i] == null && gr[j] == null ? '#4b5568' : colorOf('grade', gr[i] != null ? gr[i] : gr[j]);
+            ctx.beginPath(); ctx.moveTo(xa, u.valToPos(alt[i], 'alt', true)); ctx.lineTo(xb, u.valToPos(alt[j], 'alt', true)); ctx.lineTo(xb, bottom); ctx.lineTo(xa, bottom); ctx.fill();
+          }
+          ctx.restore();
+        }],
         draw: [(u) => { // pauses: dotted vertical (shaded band on the elapsed axis) + pause length
           const ctx = u.ctx, dpr = window.devicePixelRatio || 1, { left, top, width, height } = u.bbox;
           ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
-          ctx.setLineDash([3 * dpr, 4 * dpr]); ctx.strokeStyle = '#e6e9f2cc'; ctx.lineWidth = 1.5 * dpr;
+          ctx.setLineDash([3 * dpr, 4 * dpr]); ctx.strokeStyle = TH.text; ctx.lineWidth = 1.5 * dpr;
           ctx.font = `${11 * dpr}px system-ui`; ctx.textAlign = 'center';
           let lastRight = -1e9;
           for (const ps of A.pauses) {
             const x0 = u.valToPos(x[ps.i], 'x', true), x1 = u.valToPos(x[ps.i + 1], 'x', true);
             if (x1 < left || x0 > left + width) continue;
-            if (x1 - x0 > 3 * dpr) { ctx.fillStyle = '#e6e9f214'; ctx.fillRect(x0, top, x1 - x0, height); }
+            if (x1 - x0 > 3 * dpr) { ctx.globalAlpha = 0.08; ctx.fillStyle = TH.text; ctx.fillRect(x0, top, x1 - x0, height); ctx.globalAlpha = 1; }
             for (const xx of (x1 - x0 > 3 * dpr ? [x0, x1] : [x0])) { ctx.beginPath(); ctx.moveTo(Math.round(xx) + 0.5, top); ctx.lineTo(Math.round(xx) + 0.5, top + height); ctx.stroke(); }
             const label = 'paused ' + fmtDur(ps.dur), tw = ctx.measureText(label).width, mid = Math.max(left + tw / 2 + 4, Math.min(left + width - tw / 2 - 4, (x0 + x1) / 2));
             if (mid - tw / 2 - 6 * dpr < lastRight) continue; // would overlap previous label
             lastRight = mid + tw / 2 + 6 * dpr;
-            ctx.fillStyle = '#0d1220cc'; ctx.fillRect(mid - tw / 2 - 4 * dpr, top + 2 * dpr, tw + 8 * dpr, 16 * dpr);
-            ctx.fillStyle = '#e6e9f2'; ctx.fillText(label, mid, top + 14 * dpr);
+            ctx.globalAlpha = 0.8; ctx.fillStyle = TH.bg; ctx.fillRect(mid - tw / 2 - 4 * dpr, top + 2 * dpr, tw + 8 * dpr, 16 * dpr);
+            ctx.globalAlpha = 1; ctx.fillStyle = TH.text; ctx.fillText(label, mid, top + 14 * dpr);
           }
           ctx.restore();
         }],
@@ -452,10 +648,13 @@
     selRaf = requestAnimationFrame(() => { selRaf = 0; drawTrack(); renderSelStats(); renderLegend(); markLapRows(); });
   }
 
+  // "12:34 · 3.21 km" for a record; time is left out for tracks without timestamps
+  const posLabel = (i) => [A.noTime ? null : fmtDur(A.mt[i]), A.hasDist ? A.km[i].toFixed(2) + ' ' + UN.du : null].filter(Boolean).join(' · ') || '#' + i;
+
   function renderReadout() {
     const i = S.hover, act = chartMetrics();
     if (i == null) { $('readout').innerHTML = '<span class="muted">Hover chart or track for values</span>'; return; }
-    let h = `<span><b>${fmtDur(A.mt[i])}</b>${A.hasDist ? ' · ' + A.km[i].toFixed(2) + ' km' : ''}</span>`;
+    let h = `<span><b>${posLabel(i)}</b></span>`;
     for (const k of act) { const m = METRICS[k]; h += `<span style="color:${m.color}">${m.label} <b>${m.fmt(A.chart[k][i])}</b> ${m.unit}</span>`; }
     $('readout').innerHTML = h;
   }
@@ -483,7 +682,7 @@
       if (i == null || !A.hasGps) { hoverMarker.remove(); halo.remove(); return; }
       if (src === 'chart') { halo.setLatLng([A.lat[i], A.lon[i]]); if (!map.hasLayer(halo)) halo.addTo(map); } else halo.remove();
       hoverMarker.setLatLng([A.lat[i], A.lon[i]]);
-      let h = `<b>${fmtDur(A.mt[i])}</b>${A.hasDist ? ' · ' + A.km[i].toFixed(2) + ' km' : ''}<br>`;
+      let h = `<b>${posLabel(i)}</b><br>`;
       for (const k of KEYS) {
         if (!A.has[k] || A.smooth[k][i] == null) continue;
         const m = METRICS[k], dot = m.bands ? `<span class="dot" style="background:${bandColor(k, A.smooth[k][i])}"></span>` : '';
@@ -502,6 +701,7 @@
     followTo = null;
     if (savedView) { map.setView(savedView.c, savedView.z, { animate: false }); savedView = null; }
   }
+  let canvasDim = null, scaleCtl = null;
   let map = null, baseLayer = null, trackGroup = null, markGroup = null, hoverMarker = null, canvas = null;
   const OSMA = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   const LAYERS = {
@@ -534,7 +734,11 @@
     if (map) return;
     canvas = L.canvas({ padding: 0.3, tolerance: 6 });
     map = L.map('map', { renderer: canvas, zoomSnap: 0.25, attributionControl: true });
-    L.control.scale({ imperial: false }).addTo(map);
+    scaleCtl = L.control.scale({ imperial: U.imp, metric: !U.imp }).addTo(map);
+    // de-emphasised (unselected) part of the track lives in its own semi-transparent layer: everything in it
+    // is drawn opaque and the layer as a whole is faded, so overlapping line ends do not show as darker blobs
+    const dimPane = map.createPane('trackDim'); dimPane.style.zIndex = 399; dimPane.style.opacity = 0.5; dimPane.style.pointerEvents = 'none';
+    canvasDim = L.canvas({ pane: 'trackDim', padding: 0.3 });
     trackGroup = L.layerGroup().addTo(map); markGroup = L.layerGroup().addTo(map);
     hoverMarker = L.circleMarker([0, 0], { radius: 7, color: '#fff', weight: 2.5, fillColor: '#000', fillOpacity: 1, interactive: false });
     halo = L.circleMarker([0, 0], { radius: 20, color: '#fff', weight: 2, opacity: 0.9, fillColor: '#fff', fillOpacity: 0.18, interactive: false });
@@ -616,16 +820,15 @@
     const dimmed = !!activeSel(), W = S.lineW;
     // casing
     // double casing: white outer edge reads on dark/satellite maps, dark inner edge on light maps
-    const casing = (pts, w, op) => {
-      L.polyline(pts, { color: '#ffffff', weight: w + 5, opacity: op * 0.9, interactive: false, renderer: canvas }).addTo(trackGroup);
-      L.polyline(pts, { color: '#0b0f1a', weight: w + 2.5, opacity: op, interactive: false, renderer: canvas }).addTo(trackGroup);
-    };
+    const line = (pts, color, weight, dim, opacity) => L.polyline(pts, { color, weight, opacity: opacity == null ? 1 : opacity, interactive: false,
+      lineCap: 'round', lineJoin: 'round', smoothFactor: 0.6, renderer: dim ? canvasDim : canvas }).addTo(trackGroup);
+    const casing = (pts, w, dim) => { line(pts, '#ffffff', w + 5, dim, dim ? 1 : 0.9); line(pts, '#0b0f1a', w + 2.5, dim); };
     const parts = (a, b) => { // vertices a..b split into pieces at pauses
       const out = []; let cur = [all[a]];
       for (let q = a; q < b; q++) { if (A.pc[idx[q + 1]] !== A.pc[idx[q]]) { out.push(cur); cur = []; } cur.push(all[q + 1]); }
       out.push(cur); return out.filter((x) => x.length > 1);
     };
-    if (dimmed) { casing(parts(0, m - 1), W * 0.6, 0.4); casing(parts(pLo, pHi), W, 1); } else casing(parts(0, m - 1), W, 1);
+    if (dimmed) { casing(parts(0, m - 1), W * 0.6, true); casing(parts(pLo, pHi), W, false); } else casing(parts(0, m - 1), W, false);
     // colour runs; segment p joins drawn vertices p and p+1
     const gapMs = 10000;
     let start = 0, cur = null;
@@ -638,7 +841,7 @@
     const flush = (end) => {
       if (cur == null) return;
       const inSel = cur[0] === '1';
-      L.polyline(all.slice(start, end + 1), { color: cur.slice(1), weight: inSel ? W : W * 0.6, opacity: inSel ? 1 : 0.5, interactive: false, lineCap: 'butt', renderer: canvas }).addTo(trackGroup);
+      line(all.slice(start, end + 1), cur.slice(1), inSel ? W : W * 0.6, !inSel); // round caps + joins: consecutive colour runs overlap into one smooth line
     };
     for (let p = 0; p < m - 1; p++) {
       const k = segKey(p);
@@ -673,7 +876,7 @@
     if (!A.hasGps) { const lp = $('legendPick'); lp.innerHTML = ''; for (const k of KEYS) if (A.has[k]) lp.add(new Option(METRICS[k].label, k)); lp.value = key; lp.onchange = () => { S.colorBy = lp.value; store.set('colorBy', S.colorBy); refreshColors(); }; }
     const zones = isZones(key);
     let h = '';
-    if (m.bands) h += '<div class="row" style="margin-bottom:8px"><span class="muted small">Colour as</span><div class="seg" id="modeSeg">' + [['zones', 'Zones'], ['cont', 'Continuous']].map(([k, t]) => `<button data-mode="${k}" class="${(k === 'zones') === zones ? 'on' : ''}">${t}</button>`).join('') + '</div></div>';
+    if (m.bands) h += '<div class="row" style="margin-bottom:8px" title="Zones: colour by reference bands. Continuous: smooth colour scale that also shows variation inside a band."><span class="muted small">Colour as</span><div class="seg" id="modeSeg">' + [['zones', 'Zones'], ['cont', 'Continuous']].map(([k, t]) => `<button data-mode="${k}" class="${(k === 'zones') === zones ? 'on' : ''}">${t}</button>`).join('') + '</div></div>';
     if (zones) {
       const e = m.bands.edges, cnt = new Array(e.length + 1).fill(0); let tot = 0;
       for (let i = lo; i <= hi; i++) if (vals[i] != null) { cnt[bandIndex(m, vals[i])]++; tot++; }
@@ -684,7 +887,7 @@
         const pct = tot ? (cnt[i] / tot) * 100 : 0;
         h += `<div class="lg-row"><span class="lg-sw" style="background:${m.bands.colors[i]}"></span><span>${m.bands.labels[i]}</span><span class="lg-range">${range} ${m.unit}</span><span class="lg-bar"><i style="width:${pct}%;background:${m.bands.colors[i]}"></i></span><span class="lg-pct">${pct.toFixed(0)}%</span></div>`;
       }
-      h += `<div class="lg-edit"><span class="muted">Band edges (${m.unit})</span>${e.map((v, i) => `<input type="number" step="any" data-edge="${i}" value="${v}">`).join('')}<button class="btn small" id="edgeReset">Reset</button>`;
+      h += `<div class="lg-edit" title="Boundaries between the bands. Edit to set your own targets; saved in this browser."><span class="muted">Band edges (${m.unit})</span>${e.map((v, i) => `<input type="number" step="any" data-edge="${i}" value="${v}">`).join('')}<button class="btn small" id="edgeReset">Reset</button>`;
       if (key === 'hr') h += `<span class="muted">· max HR</span><input type="number" id="maxHr" value="${store.get('maxHr', 190)}">`;
       h += '</div>';
     } else {
@@ -696,9 +899,10 @@
     }
     if (!zones && !m.div && key !== 'balance') {
       const cur = store.get('palette', 'plasma');
-      h += '<div class="row" style="margin-top:8px"><span class="muted small">Colour map</span><div class="seg" id="palSeg">' + Object.keys(PALETTES).map((k) => `<button data-pal="${k}" class="${k === cur ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('') + '</div></div>';
+      h += '<div class="row" style="margin-top:8px" title="Colour scale for continuous colouring, from low to high values"><span class="muted small">Colour map</span><div class="seg" id="palSeg">' + Object.keys(PALETTES).map((k) => `<button data-pal="${k}" class="${k === cur ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('') + '</div></div>';
     }
-    h += `<label class="row small" style="margin-top:10px;cursor:pointer"><input type="checkbox" id="chartColorsChk" ${S.chartColors ? 'checked' : ''}> Show these colours in the chart <span class="muted">(${m.label} line)</span></label>`;
+    if (m.div) h += '<div class="row" style="margin-top:8px" title="Colours for downhill → flat → uphill"><span class="muted small">Colour map</span><div class="seg" id="gradeSeg">' + Object.keys(GRADE_PALS).map((k) => `<button data-gp="${k}" class="${k === store.get('gradePal', 'rwg') ? 'on' : ''}">${GRADE_PALS[k].name}</button>`).join('') + '</div></div>';
+    h += `<label class="row small" style="margin-top:10px;cursor:pointer" title="Colour this metric's line in the chart by value, with the same colours as on the map. Other lines keep their own colour."><input type="checkbox" id="chartColorsChk" ${S.chartColors ? 'checked' : ''}> Show these colours in the chart <span class="muted">(${m.label} line)</span></label>`;
     const tip = [zones ? 'Bars show the share of time spent in each band. Band edges are editable and saved in this browser.' : m.div ? 'Fixed scale from −12% (downhill) to +12% (uphill).' : key === 'balance' ? 'Fixed scale from 47% to 53% left.' : 'Relative scale: spans this activity’s 5th–95th percentile.', m.bands ? '<b>Zones / Continuous</b>: draw this metric in its reference bands, or as a smooth colour scale that shows finer variation within a band.' : null, '<b>Show these colours in the chart</b>: the line of this metric in the chart is coloured by value with the same colours as the map; other lines keep their own colour.', m.note].filter(Boolean).join('<br><br>');
     $('legendInfoTip').innerHTML = tip;
     $('legend').innerHTML = h;
@@ -714,6 +918,7 @@
       };
     });
     const ps = $('palSeg'); if (ps) ps.onclick = (e) => { const b = e.target.closest('button'); if (!b) return; store.set('palette', b.dataset.pal); SEQ = PALETTES[b.dataset.pal]; refreshColors(); };
+    const gs = $('gradeSeg'); if (gs) gs.onclick = (e) => { const b = e.target.closest('button'); if (b) setGradePal(b.dataset.gp); };
     const ms = $('modeSeg'); if (ms) ms.onclick = (e) => { const b = e.target.closest('button'); if (!b) return; if (b.dataset.mode === 'cont') modes[key] = 'cont'; else delete modes[key]; store.set('modes', modes); refreshColors(); };
     $('chartColorsChk').onchange = () => { S.chartColors = $('chartColorsChk').checked; store.set('chartColors', S.chartColors); buildToggles(); buildChart(); };
     const rs = $('edgeReset'); if (rs) rs.onclick = () => { if (key === 'hr') store.del('maxHr'); apply(DEFAULT_EDGES[key].slice()); };
@@ -724,12 +929,12 @@
   const dot = (k, v) => (METRICS[k].bands && v != null && isFinite(v) ? `<span class="dot" style="background:${bandColor(k, v)}"></span>` : ''); // table dots always show the zone
   function renderSelStats() {
     const [lo, hi] = selRange(), st = stats(lo, hi);
-    $('selTitle').textContent = activeSel() ? `Selection · ${fmtDur(A.mt[lo])} – ${fmtDur(A.mt[hi])}${A.hasDist ? ` · km ${A.km[lo].toFixed(2)} – ${A.km[hi].toFixed(2)}` : ''}` : 'Whole activity';
+    $('selTitle').textContent = activeSel() ? 'Selection · ' + [A.noTime ? null : `${fmtDur(A.mt[lo])} – ${fmtDur(A.mt[hi])}`, A.hasDist ? `${UN.du} ${A.km[lo].toFixed(2)} – ${A.km[hi].toFixed(2)}` : null].filter(Boolean).join(' · ') : 'Whole activity';
     $('resetSel').hidden = !S.sel; $('chartReset').hidden = !S.sel;
     const tl = [];
-    if (A.hasDist) tl.push(['Distance', st.dist.toFixed(2), 'km']);
-    tl.push(['Moving time', fmtDur(st.dur), '']);
-    if (A.has.alt) tl.push(['Elev gain', st.up.toFixed(0), 'm'], ['Descent', st.down.toFixed(0), 'm']);
+    if (A.hasDist) tl.push(['Distance', st.dist.toFixed(2), UN.du]);
+    if (!A.noTime) tl.push(['Moving time', fmtDur(st.dur), '']);
+    if (A.has.alt) tl.push(['Elev gain', st.up.toFixed(0), UN.eu], ['Descent', st.down.toFixed(0), UN.eu]);
     let h = `<div class="tiles" style="grid-template-columns:repeat(${tl.length},1fr);margin-bottom:10px">` + tl.map((t) => `<div class="tile"><div class="k">${t[0]}</div><div class="v">${t[1]}<span class="u">${t[2]}</span></div></div>`).join('') + '</div>';
     $('selStats').innerHTML = h;
     h = '<div class="tablewrap"><table><thead><tr><th>Metric</th><th>Avg</th><th>Min</th><th>Max</th></tr></thead><tbody>';
@@ -742,30 +947,33 @@
   }
 
   // ---- lap table: sortable columns, column chooser, drag across rows to select several laps
-  const lapUI = { sort: null, hidden: store.get('lapHidden', []), dots: store.get('lapDots', true), order: [], cols: [], drag: null };
+  const lapUI = { sort: null, shownX: store.get('lapShownX', []), hidden: store.get('lapHidden', []), dots: store.get('lapDots', true), order: [], cols: [], drag: null };
+  // built-in columns are shown unless hidden; columns for extra metrics (key "xm:...") are hidden unless switched on
+  const lapHidden = (key) => (key.indexOf('xm:') === 0 ? !lapUI.shownX.includes(key) : lapUI.hidden.includes(key));
   function lapColumns() {
-    const pc = (l) => (l.timer && l.dist ? l.timer / (l.dist / 1000) : null);
+    const pc = (l) => (l.timer && l.dist ? paceOf(l.timer, l.dist / UN.DM) : null), pf = METRICS.pace.fmt;
     const cu = METRICS.cadence.unit, d = (k, v) => (lapUI.dots ? dot(k, v) : '');
     const eff = (l) => l.st.m.effort && l.st.m.effort.avg, lss = (l) => l.st.m.lss && l.st.m.lss.avg;
     // [key, title, cell html, raw value (sorting + "has data" test)]
     return [
       ['lap', 'Lap', (l) => l.index, (l) => l.index],
-      ['dist', 'Distance', (l) => (l.dist / 1000).toFixed(2) + ' km', (l) => l.dist], ['time', 'Time', (l) => fmtDur(l.timer), (l) => l.timer], ['total', 'Total', (l) => fmtDur(A.mt[l.hi]), (l) => A.mt[l.hi]],
-      ['pace', 'Avg Pace', (l) => fmtPace(pc(l)), pc], ['effort', 'Effort Pace ≈', (l) => fmtPace(eff(l)), eff],
+      ['dist', 'Distance', (l) => (l.dist / UN.DM).toFixed(2) + ' ' + UN.du, (l) => l.dist], ['time', 'Time', (l) => fmtDur(l.timer), (l) => l.timer], ['total', 'Total', (l) => fmtDur(A.mt[l.hi]), (l) => A.mt[l.hi]],
+      ['pace', 'Avg ' + PACE(), (l) => pf(pc(l)), pc], ['effort', 'Effort ' + PACE() + ' ≈', (l) => pf(eff(l)), eff],
       ['hr', 'Avg HR', (l) => d('hr', l.avgHr) + fx(0)(l.avgHr), (l) => l.avgHr], ['power', 'Power', (l) => fx(0)(l.avgPower) + ' W', (l) => l.avgPower],
       ['cadence', 'Cadence', (l) => d('cadence', l.avgCadence) + fx(0)(l.avgCadence) + ' ' + cu, (l) => l.avgCadence], ['gct', 'Ground Time', (l) => d('gct', l.avgGct) + fx(0)(l.avgGct) + ' ms', (l) => l.avgGct],
       ['vo', 'Stride Height', (l) => d('vo', l.avgVo) + fx(1)(l.avgVo) + ' cm', (l) => l.avgVo], ['vr', 'Stride Ratio', (l) => d('vr', l.avgVr) + fx(1)(l.avgVr) + ' %', (l) => l.avgVr],
       ['stride', 'Stride Length', (l) => fx(0)(l.avgStride) + ' cm', (l) => l.avgStride], ['balance', 'L/R Balance', (l) => d('balance', l.avgBalance) + fx(1)(l.avgBalance) + ' %', (l) => l.avgBalance],
       ['lss', 'Leg Stiffness', (l) => fx(1)(lss(l)) + ' kN/m', lss],
-      ['ascent', 'Elev Gain', (l) => fx(0)(l.ascent) + ' m', (l) => l.ascent], ['descent', 'Descent', (l) => fx(0)(l.descent) + ' m', (l) => l.descent], ['temp', 'Temp', (l) => fx(0)(l.avgTemp) + ' °C', (l) => l.avgTemp],
-    ].filter((c) => A.laps.some((l) => { const v = c[3](l); return v != null && isFinite(v) && v !== 0; }));
+      ['ascent', 'Elev Gain', (l) => fx(0)(elevOf(l.ascent)) + ' ' + UN.eu, (l) => l.ascent], ['descent', 'Descent', (l) => fx(0)(elevOf(l.descent)) + ' ' + UN.eu, (l) => l.descent], ['temp', 'Temp', (l) => fx(0)(tempOf(l.avgTemp)) + ' ' + UN.tu, (l) => l.avgTemp],
+    ].concat(KEYS.filter((k) => METRICS[k].dynamic && A.has[k]).map((k) => { const m = METRICS[k], av = (l) => l.st.m[k] && l.st.m[k].avg; return ['xm:' + k, m.label, (l) => m.fmt(av(l)) + (m.unit ? ' ' + m.unit : ''), av]; }))
+      .filter((c) => A.laps.some((l) => { const v = c[3](l); return v != null && isFinite(v) && v !== 0; }));
   }
   function renderLaps() {
     $('lapsCard').hidden = !A.laps.length;
     if (!A.laps.length) { $('laps').innerHTML = ''; return; }
     A.laps.forEach((l) => { if (!l.st) l.st = stats(l.lo, l.hi); });
     const avail = lapUI.cols = lapColumns();
-    const cols = avail.filter((c) => c[0] === 'lap' || !lapUI.hidden.includes(c[0]));
+    const cols = avail.filter((c) => c[0] === 'lap' || !lapHidden(c[0]));
     const num = (v) => (v == null || !isFinite(v) ? null : v);
     const order = A.laps.map((_, i) => i), srt = lapUI.sort && cols.find((c) => c[0] === lapUI.sort.key);
     if (srt) order.sort((a, b) => {
@@ -784,7 +992,7 @@
     markLapRows();
     // column chooser menu
     const menu = $('lapMenu');
-    menu.innerHTML = '<div class="mh">Columns</div>' + avail.filter((c) => c[0] !== 'lap').map((c) => `<label><input type="checkbox" data-col="${c[0]}" ${lapUI.hidden.includes(c[0]) ? '' : 'checked'}> ${c[1]}</label>`).join('') +
+    menu.innerHTML = '<div class="mh">Columns</div>' + avail.filter((c) => c[0] !== 'lap').map((c) => `<label><input type="checkbox" data-col="${c[0]}" ${lapHidden(c[0]) ? '' : 'checked'}> ${c[1]}</label>`).join('') +
       `<div class="mh">Display</div><label><input type="checkbox" id="lapDots" ${lapUI.dots ? 'checked' : ''}> Colour indicators</label><button class="btn small" id="lapColsAll">Show all columns</button>`;
   }
   // delegated handlers (table and menu elements persist across re-renders)
@@ -814,25 +1022,50 @@
     const l = A.laps[lapUI.order[dg.from]]; // plain click: toggle that lap
     if (S.sel && S.sel[0] === l.lo && S.sel[1] === l.hi) setSel(null, null, true); else setSel(l.lo, l.hi, true);
   });
-  $('lapGear').onclick = (e) => { e.stopPropagation(); $('lapMenu').hidden = !$('lapMenu').hidden; };
+  // chart options menu: gradient-coloured elevation fill and its colour scale
+  function setGradePal(k) {
+    if (!GRADE_PALS[k]) return;
+    store.set('gradePal', k); DIV = GRADE_PALS[k].stops; syncChartMenu();
+    if (A) { drawTrack(); renderLegend(); if (plot) plot.redraw(false); }
+  }
+  function syncChartMenu() {
+    $('gradeFillChk').checked = S.gradeFill; $('unknownChk').checked = S.showUnknown;
+    $('smoothSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('on', +b.dataset.s === S.smoothSec));
+    $('gradePalBox').innerHTML = Object.keys(GRADE_PALS).map((k) => `<label><input type="radio" name="gradePal" value="${k}" ${k === store.get('gradePal', 'rwg') ? 'checked' : ''}> <span class="swatch" style="background:linear-gradient(90deg,${GRADE_PALS[k].stops.join(',')})"></span> ${GRADE_PALS[k].name}</label>`).join('');
+  }
+  syncChartMenu();
+  $('chartGear').onclick = (e) => { e.stopPropagation(); $('lapMenu').hidden = true; $('chartMenu').hidden = !$('chartMenu').hidden; };
+  $('chartMenu').addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => { $('chartMenu').hidden = true; });
+  $('smoothSeg').onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    S.smoothSec = +b.dataset.s; store.set('smoothSec', S.smoothSec); syncChartMenu(); reprocess();
+  };
+  $('chartMenu').addEventListener('change', (e) => {
+    if (e.target.id === 'unknownChk') { S.showUnknown = e.target.checked; store.set('showUnknown', S.showUnknown); if (A) { registerExtras(A.fit); reprocess(); } }
+    else if (e.target.id === 'gradeFillChk') { S.gradeFill = e.target.checked; store.set('gradeFill', S.gradeFill); if (A && plot) buildChart(); }
+    else if (e.target.name === 'gradePal') setGradePal(e.target.value);
+  });
+  $('lapGear').onclick = (e) => { e.stopPropagation(); $('chartMenu').hidden = true; $('lapMenu').hidden = !$('lapMenu').hidden; };
   $('lapMenu').addEventListener('click', (e) => e.stopPropagation());
   document.addEventListener('click', () => { $('lapMenu').hidden = true; });
   $('lapMenu').addEventListener('change', (e) => {
     const t = e.target;
     if (t.id === 'lapDots') { lapUI.dots = t.checked; store.set('lapDots', lapUI.dots); }
+    else if (t.dataset.col && t.dataset.col.indexOf('xm:') === 0) { lapUI.shownX = lapUI.shownX.filter((k) => k !== t.dataset.col); if (t.checked) lapUI.shownX.push(t.dataset.col); store.set('lapShownX', lapUI.shownX); }
     else if (t.dataset.col) { lapUI.hidden = lapUI.hidden.filter((k) => k !== t.dataset.col); if (!t.checked) lapUI.hidden.push(t.dataset.col); store.set('lapHidden', lapUI.hidden); }
     renderLaps();
   });
-  $('lapMenu').addEventListener('click', (e) => { if (e.target.id === 'lapColsAll') { lapUI.hidden = []; store.set('lapHidden', []); renderLaps(); } });
+  $('lapMenu').addEventListener('click', (e) => { if (e.target.id === 'lapColsAll') { lapUI.hidden = []; store.set('lapHidden', []); lapUI.shownX = lapUI.cols.map((c) => c[0]).filter((k) => k.indexOf('xm:') === 0); store.set('lapShownX', lapUI.shownX); renderLaps(); } });
 
   function renderQuick() {
-    const Q = [['Best lap', A.lapBest, 'best'], ['Worst lap', A.lapWorst, 'worst'], ['Best km', A.kmBest, 'best'], ['Worst km', A.kmWorst, 'worst']];
+    const Q = [['Best lap', A.lapBest, 'best'], ['Worst lap', A.lapWorst, 'worst'], ['Best ' + UN.du, A.kmBest, 'best'], ['Worst ' + UN.du, A.kmWorst, 'worst']];
     const box = $('quickSel'); box.innerHTML = '';
     for (const [label, r, cls] of Q) {
       if (!r) continue;
       const b = document.createElement('button'); b.className = 'btn small q ' + cls;
-      b.innerHTML = `${label}${r.lap != null ? ' ' + A.laps[r.lap].index : ''} · <b>${fmtPace(r.pace)}</b>`;
-      b.title = `km ${A.km[r.lo].toFixed(2)} – ${A.km[r.hi].toFixed(2)}`;
+      b.innerHTML = `${label}${r.lap != null ? ' ' + A.laps[r.lap].index : ''} · <b>${METRICS.pace.fmt(r.pace)}</b>${U.speed ? ' ' + METRICS.pace.unit : ''}`;
+      b.title = `Select this section on chart and map · ${UN.du} ${A.km[r.lo].toFixed(2)} – ${A.km[r.hi].toFixed(2)}`;
       b.onclick = () => setSel(r.lo, r.hi, true);
       box.appendChild(b);
     }
@@ -847,22 +1080,23 @@
   function renderSummary() {
     const s = A.fit.session, st = stats(0, A.n - 1), g = (k) => (st.m[k] ? st.m[k].avg : null);
     const or = (a, b) => (a != null && isFinite(a) && a !== 0 ? a : b);
-    const dist = A.hasDist ? or(s.dist, A.km[A.n - 1] * 1000) / 1000 : null, timer = or(s.timer, A.mt[A.n - 1]);
+    const dist = A.hasDist ? or(s.dist, A.km[A.n - 1] * UN.DM) / UN.DM : null, pf = METRICS.pace.fmt, pu = METRICS.pace.unit, timer = A.noTime ? null : or(s.timer, A.mt[A.n - 1]);
     // [label, raw value, formatter, unit, band metric]; tiles without a value are dropped
     const T = [
-      ['Distance', dist, fx(2), 'km'], ['Activity Time', timer, fmtDur, ''],
-      ['Total Time', or(s.elapsed, A.et[A.n - 1]), fmtDur, ''], ['Avg Pace', dist ? timer / dist : null, fmtPace, '/km'],
-      ['Best km', A.bestKm, fmtPace, '/km'], ['Effort Pace', s.avgEffort > 0.5 ? 1000 / s.avgEffort : g('effort'), fmtPace, '/km'],
+      ['Distance', dist, fx(2), UN.du], ['Activity Time', timer, fmtDur, ''],
+      ['Total Time', A.noTime ? null : or(s.elapsed, A.et[A.n - 1]), fmtDur, ''], ['Avg ' + PACE(), dist && timer ? paceOf(timer, dist) : null, pf, pu],
+      ['Best ' + UN.du, A.bestKm, pf, pu], ['Effort ' + PACE(), s.avgEffort > 0.5 ? spd(s.avgEffort) : g('effort'), pf, pu],
       ['Avg HR', or(s.avgHr, g('hr')), fx(0), 'bpm'], ['Max HR', or(s.maxHr, st.m.hr ? st.m.hr.max : null), fx(0), 'bpm'],
       ['Avg Power', or(s.avgPower, g('power')), fx(0), 'W'], ['Calories', s.calories, fx(0), 'kcal'],
-      ['Elev Gain', or(s.ascent, A.has.alt ? st.up : null), fx(0), 'm'], ['Total Descent', or(s.descent, A.has.alt ? st.down : null), fx(0), 'm'],
+      ['Elev Gain', or(elevOf(s.ascent), A.has.alt ? st.up : null), fx(0), UN.eu], ['Total Descent', or(elevOf(s.descent), A.has.alt ? st.down : null), fx(0), UN.eu],
       ['Avg Cadence', or(s.avgCadence, g('cadence')), fx(0), METRICS.cadence.unit, 'cadence'],
       ['Ground Time', or(s.avgGct, g('gct')), fx(0), 'ms', 'gct'],
       ['Stride Height', or(s.avgVo, g('vo')), fx(1), 'cm', 'vo'],
       ['Stride Ratio', or(s.avgVr, g('vr')), fx(1), '%', 'vr'],
       ['Stride Length', or(s.avgStride, g('stride')), fx(0), 'cm'],
       ['L/R Balance', or(s.avgBalance, g('balance')), fx(1), '% L', 'balance'],
-      ['Leg Stiffness', g('lss'), fx(1), 'kN/m'], ['Avg Temp', or(s.avgTemp, g('temp')), fx(0), '°C'],
+      ['Aerobic TE', s.aerobicTE, fx(1), ''], ['Anaerobic TE', s.anaerobicTE, fx(1), ''],
+      ['Leg Stiffness', g('lss'), fx(1), 'kN/m'], ['Avg Temp', or(tempOf(s.avgTemp), g('temp')), fx(0), UN.tu],
     ].filter((t) => t[1] != null && isFinite(t[1]) && t[1] !== 0);
     $('summary').innerHTML = T.map((t) => `<div class="tile"><div class="k">${t[0]}</div><div class="v">${t[4] ? dot(t[4], t[1]) : ''}${t[2](t[1])}<span class="u">${t[3]}</span></div></div>`).join('');
   }
@@ -885,17 +1119,34 @@
   const CAD_BANDS = METRICS.cadence.bands, CAD_NOTE = METRICS.cadence.note;
   const safe = (name, fn) => { try { fn(); } catch (e) { console.error(name, e); toast('Part of the page failed (' + name + '): ' + e.message); } };
 
+  // FIT is binary with ".FIT" at byte 8; everything else supported is XML (GPX / TCX / KML)
+  function parseAny(buf) {
+    const b = new Uint8Array(buf);
+    if (b.length > 12 && b[8] === 0x2e && b[9] === 0x46 && b[10] === 0x49 && b[11] === 0x54) return parseFit(buf);
+    return parseActivityText(new TextDecoder('utf-8').decode(b));
+  }
+
+  function syncUnits() {
+    $('setMenu').querySelectorAll('[data-u]').forEach((b) => b.classList.toggle('on', String(U[b.dataset.u]) === b.dataset.v));
+    const ab = $('autoBtn'); ab.removeAttribute('title');
+    ab.dataset.tip = 'Chosen by sport: pace for running, walking, hiking, swimming; speed for cycling, skiing and similar.' + (A ? ` This ${(SPORT_NAMES[U.sport] || 'activity').toLowerCase()}: ${U.speed ? 'speed' : 'pace'}.` : '');
+  }
+
+  let lastFile = null; // raw bytes of the loaded file, to reopen it after "Reset all settings"
   function load(buf, name) {
     let act;
-    try { act = process(dropFields(parseFit(buf)), name); } catch (e) { console.error(e); toast('Could not read file: ' + e.message); return; }
+    try { const fit = dropFields(parseAny(buf)); registerExtras(fit); resolveSpeed(fit.session.sport == null ? null : fit.session.sport); applyUnits(); syncUnits(); act = process(fit, name); } catch (e) { console.error(e); toast('Could not read file: ' + e.message); return; }
+    lastFile = { buf, name };
     A = act; S.sel = null; S.preview = null; S.hover = null; lapUI.sort = null; savedView = null; followTo = null;
+    syncUnits(); // now that an activity is loaded, the Auto tooltip can say what it resolved to
     $('empty').hidden = true; $('app').hidden = false;
     // cadence: steps/min with form bands for running/walking, plain rpm otherwise
     Object.assign(METRICS.cadence, A.foot ? { unit: 'spm', bands: CAD_BANDS, seq: false, note: CAD_NOTE } : { unit: 'rpm', bands: null, seq: true, note: null });
     const s = A.fit.session, d = new Date(A.R[0].t);
-    $('actName').textContent = ({ 1: 'Run', 2: 'Ride', 5: 'Swim', 11: 'Walk', 17: 'Hike' }[s.sport] || 'Activity') + ' · ' + d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    $('actSub').textContent = [d.toLocaleTimeString(undefined, { timeStyle: 'short' }), A.fit.device.name, name, A.hasDist ? A.km[A.n - 1].toFixed(2) + ' km' : null].filter(Boolean).join(' · ');
-    document.title = 'FitFilePlus — ' + d.toLocaleDateString();
+    const kind = SPORT_NAMES[s.sport] || (A.noTime ? 'Track' : 'Activity');
+    $('actName').textContent = A.noTime ? kind + ' · no timestamps in file' : kind + ' · ' + d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    $('actSub').textContent = [A.noTime ? null : d.toLocaleTimeString(undefined, { timeStyle: 'short' }), A.fit.device.name, name, A.hasDist ? A.km[A.n - 1].toFixed(2) + ' ' + UN.du : null].filter(Boolean).join(' · ');
+    document.title = 'FitFilePlus — ' + (A.noTime ? name || 'track' : d.toLocaleDateString());
     // only offer what this file contains
     const pref = store.get('colorBy', 'gct');
     S.colorBy = A.has[pref] ? pref : (['gct', 'cadence', 'hr', 'pace'].find((k) => A.has[k]) || KEYS.find((k) => A.has[k]));
@@ -906,7 +1157,9 @@
     const prefX = store.get('xMode', 'mt');
     S.xMode = prefX === 'km' && !A.hasDist ? 'mt' : prefX;
     $('xMode').querySelector('[data-x=km]').hidden = !A.hasDist;
-    $('xMode').querySelector('[data-x=et]').hidden = !A.pauses.length;
+    $('xMode').querySelector('[data-x=et]').hidden = !A.pauses.length || A.noTime;
+    $('xMode').querySelector('[data-x=mt]').hidden = A.noTime && A.hasDist;
+    if (A.noTime && A.hasDist) S.xMode = 'km';
     if (S.xMode === 'et' && !A.pauses.length) S.xMode = 'mt';
     $('xMode').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.x === S.xMode));
     if (!S.metrics.some((k) => A.has[k])) S.metrics = S.metrics.concat(['pace', 'hr', 'alt', 'power', 'cadence'].filter((k) => A.has[k]).slice(0, 2));
@@ -937,7 +1190,6 @@
 
   function readFile(f) {
     if (!f) return;
-    if (!/\.fit$/i.test(f.name)) { toast('Please drop a .fit file (GPX/TCX lack running-form data)'); return; }
     const r = new FileReader(); r.onload = () => load(r.result, f.name); r.onerror = () => toast('Could not read file'); r.readAsArrayBuffer(f);
   }
   $('fileInput').onchange = (e) => { readFile(e.target.files[0]); e.target.value = ''; };
@@ -957,6 +1209,39 @@
   $('resetSel').onclick = () => setSel(null, null, true);
   $('chartReset').onclick = () => setSel(null, null, true);
   $('fitBtn').onclick = () => fitMap();
+  // a setting that changes the computed data (units, smoothing) was changed: recompute from the parsed
+  // file and redraw. Same records, so indices - and with them the current selection - stay valid.
+  function reprocess() {
+    if (!A) return;
+    const sel = S.sel; A = process(A.fit, A.fileName); S.sel = sel; S.preview = null;
+    // the set of metrics may have changed (unidentified fields switched on/off): keep "Colour by" valid
+    if (!A.has[S.colorBy]) S.colorBy = ['gct', 'cadence', 'hr', 'pace'].find((k) => A.has[k]) || KEYS.find((k) => A.has[k]);
+    const cb = $('colorBy'); cb.innerHTML = ''; for (const k of KEYS) if (A.has[k]) cb.add(new Option(METRICS[k].label, k)); cb.value = S.colorBy;
+    safe('chart', () => { buildToggles(); buildChart(); });
+    safe('map', drawTrack); safe('legend', renderLegend); safe('stats', renderSelStats); safe('laps', renderLaps); safe('summary', renderSummary); safe('quick', renderQuick);
+  }
+  // settings menu (gear, top right): theme and units
+  $('setGear').onclick = (e) => { e.stopPropagation(); $('lapMenu').hidden = true; $('chartMenu').hidden = true; $('setMenu').hidden = !$('setMenu').hidden; };
+  $('setMenu').addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => { $('setMenu').hidden = true; });
+  syncUnits();
+  $('setMenu').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-u]'); if (!b) return;
+    if (b.dataset.u === 'mode') U.mode = b.dataset.v; else U.imp = b.dataset.v === 'true';
+    saveUnits(); resolveSpeed(); applyUnits(); syncUnits();
+    if (scaleCtl && map) { scaleCtl.remove(); scaleCtl = L.control.scale({ imperial: U.imp, metric: !U.imp }).addTo(map); }
+    if (!A) return;
+    reprocess();
+    $('actSub').textContent = $('actSub').textContent.replace(/[\d.]+ (km|mi)$/, A.hasDist ? A.km[A.n - 1].toFixed(2) + ' ' + UN.du : '');
+  });
+  $('themeSel').value = store.get('theme', 'system');
+  const themeChanged = () => {
+    if (!A) return;
+    buildToggles(); buildChart(); renderSelStats(); renderLegend(); renderLaps(); renderSummary(); drawTrack();
+  };
+  $('themeSel').onchange = () => { store.set('theme', applyTheme($('themeSel').value)); themeChanged(); };
+  // "System": follow the device when it switches between light and dark
+  if (lightMQ) { const onMQ = () => { if (store.get('theme', 'system') === 'system') { applyTheme('system'); themeChanged(); } }; if (lightMQ.addEventListener) lightMQ.addEventListener('change', onMQ); else if (lightMQ.addListener) lightMQ.addListener(onMQ); }
   $('lineW').value = S.lineW;
   $('lineW').oninput = () => { S.lineW = +$('lineW').value; store.set('lineW', S.lineW); if (A) drawTrack(); };
   $('followChk').checked = S.follow;
@@ -1076,7 +1361,21 @@
   } else window.addEventListener('resize', resize);
 
   // test/demo hook: build.py --embed puts a base64 FIT file here
-  if (window.FITFILEPLUS_EMBED) {
+  $('resetAll').onclick = () => {
+    if (!confirm('Reset all settings to their defaults?\n\nLayout, theme, units, chart metrics, smoothing, colours, band edges, map choice and lap table columns go back to default.')) return;
+    try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.indexOf('fitfileplus.') === 0) localStorage.removeItem(k); } } catch (e) { /* ignore */ }
+    // keep the activity open across the reload (session only; skipped if the file is too large for session storage)
+    try {
+      if (lastFile) { const b = new Uint8Array(lastFile.buf); let bin = ''; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); sessionStorage.setItem('fitfileplus.reopen', JSON.stringify({ name: lastFile.name, data: btoa(bin) })); }
+    } catch (e) { /* too large: user re-opens the file */ }
+    location.reload();
+  };
+  const b64ToBuf = (s64) => { const bin = atob(s64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return u8.buffer; };
+  try {
+    const re = sessionStorage.getItem('fitfileplus.reopen');
+    if (re) { sessionStorage.removeItem('fitfileplus.reopen'); const o = JSON.parse(re); load(b64ToBuf(o.data), o.name); }
+  } catch (e) { /* ignore */ }
+  if (!A && window.FITFILEPLUS_EMBED) {
     const bin = atob(window.FITFILEPLUS_EMBED.data), u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     load(u8.buffer, window.FITFILEPLUS_EMBED.name);

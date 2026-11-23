@@ -1,10 +1,10 @@
 # FitFilePlus
 
-A single-file, offline-first viewer for running activities. Drop a `.fit` file onto the page and get a linked chart, map, lap table and stats view, with running-form metrics (ground contact time, cadence, stride height, …) colour-coded on the map.
+A single-file, offline-first viewer for running activities. Drop a `.fit` file (or `.gpx`, `.tcx`, `.kml`) onto the page and get a linked chart, map, lap table and stats view, with running-form metrics (ground contact time, cadence, stride height, …) colour-coded on the map.
 
 Built to get what watch vendors' web views usually lack: a zoomed chart section highlighted on the map, outdoor-oriented base maps, and form metrics drawn along the track.
 
-**▶ Open it: <https://mandulaj.github.io/FitFilePlus/>** — then drop a `.fit` file on the page.
+**▶ Open it: <https://mandulaj.github.io/FitFilePlus/>** — then drop an activity file on the page.
 
 No install, no account, no server. To use it offline, download [`fitfileplus.html`](fitfileplus.html) and open it in a browser.
 
@@ -20,11 +20,14 @@ No install, no account, no server. To use it offline, download [`fitfileplus.htm
 - **Quick selections**: best / worst lap, fastest / slowest continuous kilometre.
 - **Pauses** are marked on the chart and break the track on the map.
 - **Layout**: resizable columns, resizable chart and map, panels can be reordered, moved between columns and collapsed. Remembered in the browser.
+- **Elevation profile coloured by gradient** (red/green, red/blue or plasma).
+- **Units and themes**: metric or imperial, pace or speed (min/km, km/h, min/mi, mph); system, dark, black and light themes.
+- **Hover help** on every control instead of permanent explanatory text; all settings are remembered in the browser and can be reset from the ⚙ menu.
 - **Only what the file contains is shown.** Missing metrics, laps or GPS simply hide the related controls. Distance and pace are derived from GPS when absent.
 
 ## Supported files
 
-`.fit` activity files. Checked with files from several watch brands, platform re-exports and bare GPS tracks.
+`.fit` is the main format: it is the only one that carries running-form metrics. Checked with files from several watch brands, platform re-exports and bare GPS tracks.
 
 | Data | Source in the FIT file |
 |---|---|
@@ -33,7 +36,18 @@ No install, no account, no server. To use it offline, download [`fitfileplus.htm
 | Effort Pace, Leg Spring Stiffness | developer fields, when the watch records them |
 | Laps, totals, pauses | `lap`, `session` and gaps between records |
 
-GPX, TCX and KML are not supported: they carry no running-form data.
+Beyond that list, files are scanned for further data and anything found is shown as an extra metric (chart, map colouring, stats): other standard FIT record fields such as respiration rate, core temperature, muscle oxygen, cycling dynamics or GPS accuracy; custom developer fields defined by watch apps and sensors; and extra numeric tags in GPX / TCX extensions. Fields without a documented meaning can be shown as `Field N` via the chart settings.
+
+Other formats are read too and show whatever they contain:
+
+| Format | Typically contains |
+|---|---|
+| `.fit` | everything above — the format to prefer |
+| `.tcx` | position, elevation, distance, heart rate, cadence, sometimes speed and power; laps |
+| `.gpx` | position, elevation, time; heart rate, cadence, power, temperature when the exporter adds extensions |
+| `.kml` | track shape and elevation only, usually without timestamps (then: no pace, no durations, distance axis only) |
+
+Running-form metrics and power from the watch are only in `.fit`.
 
 ## Reference zones
 
@@ -62,6 +76,7 @@ Stride length, leg spring stiffness, pace and power have no universal reference 
 src/index.html   page skeleton
 src/style.css    styles
 src/fit.js       minimal FIT decoder (no dependencies; also usable from node)
+src/formats.js   GPX / TCX / KML readers producing the same structure as the FIT decoder
 src/app.js       UI
 vendor/          Leaflet and uPlot, pinned
 build.py         inlines everything into fitfileplus.html

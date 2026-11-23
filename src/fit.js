@@ -95,12 +95,39 @@
       }
       if (m[253] != null) lastTs = m[253];
       if (d.global === 206) { // field_description
-        devFieldDefs[m[0] + '_' + m[1]] = { name: m[3], units: m[8], baseType: m[2] };
+        const one = (v) => (Array.isArray(v) ? v[0] : v);
+        devFieldDefs[m[0] + '_' + m[1]] = { name: one(m[3]), units: one(m[8]), baseType: m[2], scale: one(m[6]), offset: one(m[7]), nativeMesg: m[14], nativeField: m[15] };
       }
       (msgs[d.global] || (msgs[d.global] = [])).push(m);
     }
     return { msgs, devFieldDefs };
   }
+
+  // Further standard `record` fields (FIT profile): num -> [key, label, unit, scale].
+  // Shown automatically when a file contains them.
+  const REC_EXTRA = {
+    9: ['dev_grade', 'Grade (device)', '%', 100], 10: ['resistance', 'Resistance', '', 1], 12: ['cycle_length', 'Cycle Length', 'm', 100],
+    31: ['gps_accuracy', 'GPS Accuracy', 'm', 1], 32: ['vertical_speed', 'Vertical Speed', 'm/s', 1000],
+    40: ['stance_pct', 'Stance Time', '%', 100],
+    43: ['torque_eff_l', 'Torque Effectiveness L', '%', 2], 44: ['torque_eff_r', 'Torque Effectiveness R', '%', 2],
+    45: ['pedal_smooth_l', 'Pedal Smoothness L', '%', 2], 46: ['pedal_smooth_r', 'Pedal Smoothness R', '%', 2], 47: ['pedal_smooth', 'Pedal Smoothness', '%', 2],
+    51: ['ball_speed', 'Ball Speed', 'm/s', 100],
+    54: ['thb', 'Total Haemoglobin', 'g/dL', 100], 57: ['smo2', 'Muscle Oxygen (SmO2)', '%', 10],
+    67: ['pco_l', 'Platform Centre Offset L', 'mm', 1], 68: ['pco_r', 'Platform Centre Offset R', 'mm', 1],
+    81: ['battery', 'Battery', '%', 2], 82: ['motor_power', 'Motor Power', 'W', 1], 87: ['cycle_length', 'Cycle Length', 'm', 100],
+    91: ['pressure', 'Air Pressure', 'hPa', 100], 92: ['depth', 'Depth', 'm', 1000],
+    97: ['cns_load', 'CNS Load', '%', 1], 98: ['n2_load', 'N2 Load', '%', 1],
+    99: ['respiration', 'Respiration Rate', 'brpm', 1], 108: ['respiration', 'Respiration Rate', 'brpm', 100],
+    114: ['grit', 'Grit', '', 1], 115: ['flow', 'Flow', '', 1], 116: ['stress', 'Stress', '', 100],
+    117: ['ebike_range', 'E-bike Range', 'km', 1], 118: ['ebike_battery', 'E-bike Battery', '%', 1], 120: ['ebike_assist', 'E-bike Assist', '%', 1],
+    124: ['pressure_sac', 'Pressure SAC', 'bar/min', 100], 125: ['volume_sac', 'Volume SAC', 'L/min', 100], 126: ['rmv', 'Respiratory Minute Volume', 'L/min', 100],
+    127: ['ascent_rate', 'Ascent Rate', 'm/s', 1000], 129: ['po2', 'PO2', '%', 100], 139: ['core_temp', 'Core Temperature', '°C', 100],
+  };
+  // record fields that are handled elsewhere or are not metrics (ids, enums, counters, raw/packed duplicates)
+  const REC_SKIP = new Set([253, 0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 13, 17, 18, 19, 28, 29, 33, 39, 41, 42, 48, 49, 50, 52, 53, 55, 56, 58, 59, 62,
+    69, 70, 71, 72, 73, 78, 83, 84, 85, 93, 94, 95, 96, 119, 123]);
+  // developer fields that declare themselves as a native record field fill that metric when the device left it empty
+  const NATIVE_REC = { 3: 'hr', 7: 'power', 13: 'temp' };
 
   const sc = (v, scale, offset) => (v == null ? null : v / scale - (offset || 0));
   const tsMs = (v) => (v == null ? null : (v + FIT_EPOCH) * 1000);
@@ -112,9 +139,37 @@
     const devKey = {};
     for (const k in devFieldDefs) devKey[(devFieldDefs[k].name || '').toLowerCase()] = k;
     const effortKey = devKey['effort pace'], lssKey = devKey['leg spring stiffness'];
+    const extras = new Map(); // key -> { key, label, unit, unknown }
+    const addX = (x, key, label, unit, v, unknown) => {
+      if (typeof v !== 'number' || !isFinite(v)) return x;
+      if (!extras.has(key)) extras.set(key, { key, label, unit: unit || '', unknown: !!unknown });
+      (x || (x = {}))[key] = v; return x;
+    };
+    // everything in a record beyond the fixed metrics: known standard fields, unidentified fields, developer fields
+    const extraOf = (m, r) => {
+      let x = null;
+      for (const num in m) {
+        if (num === 'dev' || REC_SKIP.has(+num)) continue;
+        const v = m[num]; if (v == null || typeof v !== 'number') continue;
+        if (+num === 30) { x = addX(x, 'power_balance', 'Power Balance', '% L', v & 0x80 ? 100 - (v & 0x7f) : v & 0x7f); continue; }
+        const d = REC_EXTRA[num];
+        if (d) x = addX(x, d[0], d[1], d[2], v / d[3]);
+        else x = addX(x, 'f' + num, 'Field ' + num, '', v, true);
+      }
+      if (m.dev) for (const key in m.dev) {
+        if (key === effortKey || key === lssKey) continue;
+        const fd = devFieldDefs[key]; let v = m.dev[key];
+        if (!fd || typeof v !== 'number' || !isFinite(v)) continue;
+        if (fd.scale) v /= fd.scale; if (fd.offset) v -= fd.offset;
+        const nat = fd.nativeMesg === 20 ? NATIVE_REC[fd.nativeField] : null;
+        if (nat) { if (r[nat] == null) r[nat] = v; continue; }
+        x = addX(x, 'dev_' + key, fd.name || 'Developer field ' + key, fd.units, v);
+      }
+      return x;
+    };
     const dev = (m, key) => (key && m.dev && m.dev[key] != null ? m.dev[key] : null);
 
-    const rawRecords = (msgs[20] || []).map((m) => ({
+    const rawRecords = (msgs[20] || []).map((m) => { const r = {
       t: tsMs(m[253]),
       lat: m[0] == null ? null : m[0] * SEMI,
       lon: m[1] == null ? null : m[1] * SEMI,
@@ -132,14 +187,14 @@
       effort: dev(m, effortKey),                             // m/s
       lss: dev(m, lssKey),                                   // kN/m (developer field, running form tests)
       temp: m[13],                                           // deg C
-    })).filter((r) => r.t != null);
+    }; r.x = extraOf(m, r); return r; }).filter((r) => r.t != null);
     // Some exporters split one moment over several record messages (distance in one,
     // position/speed in the next, cadence in a third). Merge records sharing a timestamp.
     for (let i = 1; i < rawRecords.length; i++) if (rawRecords[i].t < rawRecords[i - 1].t) { rawRecords.sort((x, y) => x.t - y.t); break; } // out-of-order timestamps
     const merged = [];
     for (const r of rawRecords) {
       const last = merged[merged.length - 1];
-      if (last && last.t === r.t) { for (const k in r) if (r[k] != null) last[k] = r[k]; }
+      if (last && last.t === r.t) { for (const k in r) if (r[k] != null) { if (k === 'x' && last.x) Object.assign(last.x, r.x); else last[k] = r[k]; } }
       else merged.push(r);
     }
     const records = merged;
@@ -170,6 +225,7 @@
       avgVo: s[89] == null ? null : s[89] / 100, avgGct: sc(s[91], 10),
       avgVr: sc(s[132], 100), avgBalance: sc(s[133], 100), avgStride: s[134] == null ? null : s[134] / 100,
       avgEffort: dev(s, effortKey), avgTemp: s[57], subSport: s[6],
+      aerobicTE: sc(s[24], 10), anaerobicTE: sc(s[137], 10),
     };
 
     // timer events: event 0 = timer; type 0 start, 1 stop, 4 stop_all
@@ -181,7 +237,7 @@
     const di = (msgs[23] || [])[0] || {};
     const device = { name: fid[8] || di[27] || null, manufacturer: fid[1], product: fid[2] };
 
-    return { records, laps, session, events, device, devFields: devFieldDefs };
+    return { records, laps, session, events, device, devFields: devFieldDefs, extras: Array.from(extras.values()) };
   }
 
   root.parseFit = parseFit;
