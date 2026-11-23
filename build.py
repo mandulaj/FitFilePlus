@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inline src/ and vendor/ into one self-contained file: fitfileplus.html
+"""Inline src/ and vendor/ into one self-contained page.
 
   python3 build.py                      -> fitfileplus.html
   python3 build.py --embed run.fit out.html   -> test/demo build with that activity baked in
@@ -13,8 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 
 
-def build(embed=None, out=ROOT / "fitfileplus.html"):
-    html = (ROOT / "src/index.html").read_text(encoding="utf-8")
+def build(embed=None, out=ROOT / "fitfileplus.html", src="src/index.html"):
+    html = (ROOT / src).read_text(encoding="utf-8")
 
     def inline(m):
         text = (ROOT / m.group(1)).read_text(encoding="utf-8")

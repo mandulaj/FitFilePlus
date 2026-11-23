@@ -15,20 +15,8 @@
     del(k) { try { localStorage.removeItem('fitfileplus.' + k); } catch (e) { /* ignore */ } },
   };
 
-  // ---------- formatting ----------
-  const pad = (n) => String(n).padStart(2, '0');
-  function fmtDur(s) {
-    if (s == null || !isFinite(s)) return '–';
-    s = Math.round(s);
-    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
-    return h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`;
-  }
-  function fmtPace(secPerKm) {
-    if (secPerKm == null || !isFinite(secPerKm) || secPerKm <= 0) return '–';
-    const s = Math.round(secPerKm);
-    return `${Math.floor(s / 60)}'${pad(s % 60)}"`;
-  }
-  const fx = (d) => (v) => (v == null || !isFinite(v) ? '–' : v.toFixed(d));
+  // formatting and numeric helpers shared with the compare page live in src/core.js
+  const { fmtDur, fmtPace, fx, lerpStops, roll, quantile } = window.FFCore;
 
   // ---------- colours ----------
   const C = { purple: '#a855f7', blue: '#3b82f6', green: '#22c55e', orange: '#f59e0b', red: '#ef4444', grey: '#8a8f9c' };
@@ -42,13 +30,6 @@
     plasma: { name: 'Plasma', stops: ['#2c0594', '#7e03a8', '#cc4778', '#f89540', '#f0f921'] },
   };
   let DIV = (GRADE_PALS[store.get('gradePal', 'rwg')] || GRADE_PALS.rwg).stops;
-  function lerpStops(stops, t) {
-    t = Math.max(0, Math.min(1, t));
-    const x = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
-    const a = parseInt(stops[i].slice(1), 16), b = parseInt(stops[i + 1].slice(1), 16);
-    const ch = (sh) => Math.round(((a >> sh) & 255) * (1 - f) + ((b >> sh) & 255) * f);
-    return '#' + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
-  }
 
   const REF = 'https://www8.garmin.com/manuals/webhelp/GUID-1E5740B3-60A1-4890-B39A-7587060D785A/EN-US/GUID-EE9E7F6F-49BE-4452-82E6-B40371D0AEC1.html';
   const DYN_LABELS = { purple: 'Elite · top 5%', blue: 'Great · 70–95th pct', green: 'Good · 30–69th pct', orange: 'Fair · 5–29th pct', red: 'Low · bottom 5%' };
@@ -243,21 +224,6 @@
     hover: null,
   };
 
-  function roll(arr, half, median) {
-    const n = arr.length, out = new Array(n).fill(null), buf = [];
-    for (let i = 0; i < n; i++) {
-      buf.length = 0;
-      for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) if (arr[j] != null) buf.push(arr[j]);
-      if (!buf.length || arr[i] == null) continue;
-      if (median) { buf.sort((a, b) => a - b); out[i] = buf[buf.length >> 1]; }
-      else { let s = 0; for (const v of buf) s += v; out[i] = s / buf.length; }
-    }
-    return out;
-  }
-  function quantile(arr, q) {
-    const v = arr.filter((x) => x != null && isFinite(x)).sort((a, b) => a - b);
-    return v.length ? v[Math.min(v.length - 1, Math.max(0, Math.round(q * (v.length - 1))))] : null;
-  }
   function fillNearest(arr) {
     const out = arr.slice(); let last = null;
     for (let i = 0; i < out.length; i++) { if (out[i] == null) out[i] = last; else last = out[i]; }
@@ -450,7 +416,7 @@
     const show = (el) => {
       if (el.classList.contains('chip') && METRICS[el.dataset.key]) {
         const m = METRICS[el.dataset.key], d = descOf(el.dataset.key);
-        tip.innerHTML = `<b>${m.label}</b>${m.unit ? ` <span class="muted">${m.unit}</span>` : ''}${d ? `<div>${d}</div>` : ''}<div class="muted hint">Click: show / hide · Double-click: only this one (again: restore)</div>`;
+        tip.innerHTML = `<b>${m.label}</b>${m.unit ? ` <span class="muted">${m.unit}</span>` : ''}${d ? `<div>${d}</div>` : ''}<div class="muted hint">Click: show / hide · Double-click: only this one, and colour the map by it (again: restore)</div>`;
       } else if (el.dataset.tip) tip.innerHTML = esc(el.dataset.tip);
       else return;
       tip.hidden = false;
@@ -489,6 +455,8 @@
           S.metrics = alone && isoPrev ? isoPrev : [k];
           isoPrev = alone ? null : before;
           lastChip = null;
+          // isolating a metric also makes it the one the map is coloured by
+          if (S.metrics.length === 1 && S.metrics[0] === k && S.colorBy !== k) { S.colorBy = k; store.set('colorBy', k); $('colorBy').value = k; store.set('metrics', S.metrics); refreshColors(); if (S.chartColors) return; }
         } else {
           lastChip = { k, t: now, before: S.metrics.slice() };
           S.metrics = S.metrics.includes(k) ? S.metrics.filter((x) => x !== k) : S.metrics.concat(k);
@@ -556,6 +524,12 @@
         }],
         draw: [(u) => { // pauses: dotted vertical (shaded band on the elapsed axis) + pause length
           const ctx = u.ctx, dpr = window.devicePixelRatio || 1, { left, top, width, height } = u.bbox;
+          if (S.pickCum && u.scales.x.min != null) { // moments picked in a widget: wash out every other stretch of the chart
+            const c = S.pickCum, i0 = Math.max(0, u.valToIdx(u.scales.x.min) - 1), i1 = Math.min(A.n - 1, u.valToIdx(u.scales.x.max) + 1);
+            ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip(); ctx.fillStyle = cssVar('--card'); ctx.globalAlpha = 0.8;
+            for (let i = i0; i < i1; i++) { if (c[i + 1] > c[i]) continue; let e = i; while (e + 1 < i1 && c[e + 2] === c[e + 1]) e++; const xa = u.valToPos(x[i], 'x', true), xb = u.valToPos(x[e + 1], 'x', true); ctx.fillRect(xa, top, xb - xa, height); i = e; }
+            ctx.restore();
+          }
           ctx.save(); ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
           ctx.setLineDash([3 * dpr, 4 * dpr]); ctx.strokeStyle = TH.text; ctx.lineWidth = 1.5 * dpr;
           ctx.font = `${11 * dpr}px system-ui`; ctx.textAlign = 'center';
@@ -679,7 +653,7 @@
   // ---------- hover sync ----------
   function setHover(i, src) {
     if (i === S.hover) return;
-    S.hover = i; renderReadout(); widgetsUpdate('hover');
+    S.hover = i; S.hoverSrc = i == null ? null : src; renderReadout(); widgetsUpdate('hover');
     if (src !== 'chart' && plot) {
       syncing = true;
       if (i == null) plot.setCursor({ left: -10, top: -10 });
@@ -719,8 +693,20 @@
     if (savedView) { map.setView(savedView.c, savedView.z, { animate: false }); savedView = null; }
   }
   let canvasDim = null, scaleCtl = null;
+  // "picked" moments: a set of record indices chosen in a widget (box drawn in a scatter plot). They need not be
+  // one continuous stretch: they stay in colour on the track and in the chart while everything else is faded.
+  function setPicks(list, owner) {
+    S.picks = list && list.length ? list : null; S.picksOwner = S.picks ? owner : null; S.pickCum = null;
+    if (S.picks && A) { const c = S.pickCum = new Int32Array(A.n + 1), m = new Uint8Array(A.n); for (const i of S.picks) m[i] = 1; for (let i = 0; i < A.n; i++) c[i + 1] = c[i] + m[i]; } // prefix counts: "any picked in i..j" is one subtraction
+    if (map && A && A.hasGps) drawTrack();
+    if (plot) plot.redraw(false);
+    widgetsUpdate('picks');
+  }
   let map = null, baseLayer = null, trackGroup = null, markGroup = null, hoverMarker = null, canvas = null;
   const OSMA = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  const MAPY_KEY = { store: 'mapyKey', ask: 'Mapy.com API key (free: create a project at developer.mapy.com and copy its key). Stored only in this browser.' };
+  const MAPY_ATTR = '<a href="https://api.mapy.com/copyright" target="_blank" rel="noopener">&copy; Seznam.cz a.s. and others</a>';
+  const MAPY_LOGO = { href: 'https://mapy.com/', img: 'https://api.mapy.com/img/api/logo.svg', alt: 'Mapy.com' }; // the provider's terms ask for its logo on the map
   const LAYERS = {
     topo: { name: 'OpenTopoMap (trails, contours)', url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', o: { maxNativeZoom: 17, subdomains: 'abc', attribution: OSMA + ', SRTM | &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)' } },
     osm: { name: 'OpenStreetMap', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', o: { maxNativeZoom: 19, attribution: OSMA } },
@@ -729,21 +715,31 @@
     swissimg: { name: 'swisstopo aerial (Switzerland only)', url: 'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage/default/current/3857/{z}/{x}/{y}.jpeg', o: { maxNativeZoom: 19, attribution: '&copy; <a href="https://www.swisstopo.admin.ch">swisstopo</a>' } },
     sat: { name: 'Esri satellite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', o: { maxNativeZoom: 19, attribution: 'Tiles &copy; Esri' } },
     none: { name: 'No basemap (dark)', url: '', o: {} },
-    tf: { name: 'Thunderforest Outdoors (API key)', url: 'https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey={key}', o: { maxNativeZoom: 22, attribution: OSMA + ' | &copy; <a href="https://www.thunderforest.com">Thunderforest</a>' } },
+    // providers that need a personal (free) API key: asked for on first use, kept only in this browser
+    mapyOut: { name: 'Mapy.com Outdoor (API key)', url: 'https://api.mapy.com/v1/maptiles/outdoor/256/{z}/{x}/{y}?apikey={key}', key: MAPY_KEY, logo: MAPY_LOGO, o: { maxNativeZoom: 19, attribution: MAPY_ATTR } },
+    mapyWin: { name: 'Mapy.com Winter (API key)', url: 'https://api.mapy.com/v1/maptiles/winter/256/{z}/{x}/{y}?apikey={key}', key: MAPY_KEY, logo: MAPY_LOGO, o: { maxNativeZoom: 19, attribution: MAPY_ATTR } },
+    tf: { name: 'Thunderforest Outdoors (API key)', url: 'https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey={key}', key: { store: 'tfKey', ask: 'Thunderforest API key (free hobby tier at thunderforest.com). Stored only in this browser.' }, o: { maxNativeZoom: 22, attribution: OSMA + ' | &copy; <a href="https://www.thunderforest.com">Thunderforest</a>' } },
   };
 
+  let logoCtl = null;
+  // tile address of a layer with its API key filled in; null when the key has not been entered yet
+  const layerUrl = (id) => { const L0 = LAYERS[id]; if (!L0 || !L0.url) return null; if (!L0.key) return L0.url; const k = store.get(L0.key.store, ''); return k ? L0.url.replace('{key}', encodeURIComponent(k)) : null; };
   function setLayer(id) {
     if (!LAYERS[id]) id = 'topo';
-    let key = '';
-    if (id === 'tf') {
-      key = store.get('tfKey', '');
-      if (!key) { key = (prompt('Thunderforest API key (free hobby tier at thunderforest.com). Stored only in this browser.') || '').trim(); if (!key) { $('layerSel').value = S.layer; return; } store.set('tfKey', key); }
+    let key = ''; const kd = LAYERS[id].key;
+    if (kd) {
+      key = store.get(kd.store, '');
+      if (!key) { key = (prompt(kd.ask) || '').trim(); if (!key) { $('layerSel').value = S.layer; return; } store.set(kd.store, key); }
     }
     S.layer = id; store.set('layer', id); $('layerSel').value = id;
     if (baseLayer) baseLayer.remove();
     baseLayer = null;
+    if (logoCtl) { logoCtl.remove(); logoCtl = null; }
+    const lg = LAYERS[id].logo;
+    if (lg) { logoCtl = L.control({ position: 'bottomleft' }); logoCtl.onAdd = () => { const a = L.DomUtil.create('a', 'maplogo'); a.href = lg.href; a.target = '_blank'; a.rel = 'noopener'; a.innerHTML = `<img src="${lg.img}" alt="${lg.alt}" height="22">`; return a; }; logoCtl.addTo(map); }
     if (!LAYERS[id].url) return;
     baseLayer = L.tileLayer(LAYERS[id].url, Object.assign({ maxZoom: 20, key }, LAYERS[id].o)).addTo(map);
+    if (kd) baseLayer.once('tileerror', () => toast('Map images could not be loaded. If the API key is wrong: ⚙ → Forget map API keys, then choose the map again.'));
     baseLayer.bringToBack();
   }
 
@@ -834,7 +830,9 @@
     if (activeSel()) { for (const v of [lo, hi]) if (!idx.includes(v)) idx.push(v); idx.sort((a, b) => a - b); }
     const m = idx.length, all = idx.map((i) => [A.lat[i], A.lon[i]]);
     const pLo = idx.indexOf(lo), pHi = idx.indexOf(hi);
-    const dimmed = !!activeSel(), W = S.lineW;
+    const cum = S.pickCum, dimmed = !!activeSel() || !!cum, W = S.lineW;
+    // segment p (drawn vertices p, p+1) is emphasised when it is inside the selection and, if moments were picked, contains one
+    const bright = (p) => p >= pLo && p < pHi && (!cum || cum[idx[p + 1]] > cum[idx[p]]);
     // casing
     // double casing: white outer edge reads on dark/satellite maps, dark inner edge on light maps
     const line = (pts, color, weight, dim, opacity) => L.polyline(pts, { color, weight, opacity: opacity == null ? 1 : opacity, interactive: false,
@@ -845,7 +843,10 @@
       for (let q = a; q < b; q++) { if (A.pc[idx[q + 1]] !== A.pc[idx[q]]) { out.push(cur); cur = []; } cur.push(all[q + 1]); }
       out.push(cur); return out.filter((x) => x.length > 1);
     };
-    if (dimmed) { casing(parts(0, m - 1), W * 0.6, true); casing(parts(pLo, pHi), W, false); } else casing(parts(0, m - 1), W, false);
+    if (dimmed) {
+      casing(parts(0, m - 1), W * 0.6, true);
+      for (let p = 0; p < m - 1; p++) { if (!bright(p)) continue; let e = p; while (e + 1 < m - 1 && bright(e + 1)) e++; casing(parts(p, e + 1), W, false); p = e; }
+    } else casing(parts(0, m - 1), W, false);
     // colour runs; segment p joins drawn vertices p and p+1
     const gapMs = 10000;
     let start = 0, cur = null;
@@ -853,7 +854,7 @@
       const i = idx[p], j = idx[p + 1];
       if (A.pc[j] !== A.pc[i]) return null; // pause between these points: leave a gap
       const c = colorOf(key, vals[i] != null ? vals[i] : vals[j]);
-      return (p >= pLo && p < pHi ? '1' : '0') + c;
+      return bright(p) ? '1' + c : '0' + (cum ? '#4b5563' : c); // with picked moments, the rest also loses its colour
     };
     const flush = (end) => {
       if (cur == null) return;
@@ -947,7 +948,7 @@
   function renderSelStats() {
     const [lo, hi] = selRange(), st = stats(lo, hi);
     $('selTitle').textContent = activeSel() ? 'Selection · ' + [A.noTime ? null : `${fmtDur(A.mt[lo])} – ${fmtDur(A.mt[hi])}`, A.hasDist ? `${UN.du} ${A.km[lo].toFixed(2)} – ${A.km[hi].toFixed(2)}` : null].filter(Boolean).join(' · ') : 'Whole activity';
-    $('resetSel').hidden = !S.sel; $('chartReset').hidden = !S.sel;
+    $('resetSel').hidden = !S.sel; $('chartReset').disabled = !S.sel;
     const tl = [];
     if (A.hasDist) tl.push(['Distance', st.dist.toFixed(2), UN.du]);
     if (!A.noTime) tl.push(['Moving time', fmtDur(st.dur), '']);
@@ -1164,9 +1165,9 @@
     try { const fit = dropFields(parseAny(buf)); registerExtras(fit); resolveSpeed(fit.session.sport == null ? null : fit.session.sport); applyUnits(); syncUnits(); act = process(fit, name); } catch (e) { console.error(e); toast('Could not read file: ' + e.message); return; }
     lastFile = { buf, name };
     if (!(opts && opts.noSave)) { try { fileDB.set({ name, buf, saved: Date.now() }).catch(() => {}); } catch (e) { /* storage unavailable */ } }
-    $('closeFile').hidden = false;
+    $('closeFile').hidden = false; $('exportBtn').hidden = false; $('transport').hidden = false;
     stopReplay();
-    A = act; S.sel = null; S.preview = null; S.hover = null; lapUI.sort = null; savedView = null; followTo = null;
+    A = act; S.picks = null; S.picksOwner = null; S.pickCum = null; S.sel = null; S.preview = null; S.hover = null; lapUI.sort = null; savedView = null; followTo = null;
     syncUnits(); // now that an activity is loaded, the Auto tooltip can say what it resolved to
     $('empty').hidden = true; $('app').hidden = false;
     // cadence: steps/min with form bands for running/walking, plain rpm otherwise
@@ -1205,7 +1206,7 @@
   function applyHash() {
     const p = new URLSearchParams(location.hash.slice(1));
     if (p.get('color') && A.has[p.get('color')]) { S.colorBy = p.get('color'); $('colorBy').value = S.colorBy; }
-    if (map && p.get('layer') && LAYERS[p.get('layer')] && p.get('layer') !== 'tf') setLayer(p.get('layer'));
+    if (map && p.get('layer') && LAYERS[p.get('layer')] && !LAYERS[p.get('layer')].key) setLayer(p.get('layer'));
     if (p.get('cc')) S.chartColors = p.get('cc') === '1';
     if (p.get('mode') && METRICS[S.colorBy].bands) { if (p.get('mode') === 'cont') modes[S.colorBy] = 'cont'; else delete modes[S.colorBy]; }
     if (p.get('m')) S.metrics = p.get('m').split(',').filter((k) => METRICS[k]);
@@ -1255,12 +1256,58 @@
       t += ((now - last) / 1000) * replay.speed; last = now;
       while (i < hi && A.mt[i + 1] <= t) i++;
       setHover(i, 'replay');
-      if (S.follow && map && A.hasGps && !map.getBounds().pad(-0.15).contains([A.lat[i], A.lon[i]])) map.panTo([A.lat[i], A.lon[i]], { animate: false });
+      if (S.follow && map && A.hasGps && !$('mapCard').classList.contains('collapsed')) map.setView([A.lat[i], A.lon[i]], map.getZoom(), { animate: false }); // Follow: dot stays in the middle
       if (i >= hi) { stopReplay(); return; }
       replay.raf = requestAnimationFrame(step);
     };
     replay = { speed: +$('playSpeed').value, raf: requestAnimationFrame(step) };
   };
+  // "Compare with…": hand the open file to the compare page (its own browser database), then go there
+  $('compareBtn').onclick = (e) => {
+    if (!lastFile || !window.indexedDB) return;
+    e.preventDefault();
+    const go = () => { location.href = $('compareBtn').href; };
+    try {
+      const r = indexedDB.open('fitfileplus-compare', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('files', { keyPath: 'id' });
+      r.onerror = go;
+      r.onsuccess = () => {
+        const db = r.result, t = db.transaction('files', 'readwrite');
+        t.objectStore('files').put({ id: 'main_' + lastFile.name + '_' + lastFile.buf.byteLength, name: lastFile.name, buf: lastFile.buf });
+        t.oncomplete = () => { db.close(); go(); }; t.onerror = t.onabort = () => { db.close(); go(); };
+      };
+    } catch (err) { go(); }
+  };
+  // export menu: whole activity or the selection, as FIT or GPX (see src/export.js for what each route keeps)
+  function renderExportMenu() {
+    const X = window.FFExport, src = X.kindOf(lastFile.buf), sel = S.sel, scope = sel && store.get('exportSel', true) ? 'sel' : 'all';
+    const NOTE = {
+      fit: { fit: scope === 'all' ? 'Lossless: the original file, byte for byte.' : 'Lossless for the selected part: original messages are copied unchanged, the rest is cut away and the session totals are adjusted.',
+        other: 'Track, time, elevation, heart rate, cadence, power, temperature, laps and every extra value in the file are written; extra values become developer fields.' },
+      gpx: { gpx: scope === 'all' ? 'Lossless: the original file.' : 'Lossless for the selected part: the original points are kept exactly as they are.',
+        other: 'GPX has no standard place for most of this data. Position, elevation, time, heart rate, cadence, power and temperature use the common extensions; running-form metrics, extra fields and laps are written as additional tags, which this app reads back but other software may ignore.' },
+    };
+    let h = '';
+    if (sel) h += `<div class="mh">What</div><div class="seg"><button data-scope="all" class="${scope === 'all' ? 'on' : ''}">Whole activity</button><button data-scope="sel" class="${scope === 'sel' ? 'on' : ''}" title="Only the section currently selected in the chart">Selection</button></div>`;
+    h += '<div class="mh">Format</div>';
+    h += A.noTime ? '<div class="note">FIT needs timestamps, which this file does not have.</div>' : `<button class="btn small" data-fmt="fit">FIT</button><div class="note">${src === 'fit' ? NOTE.fit.fit : NOTE.fit.other}</div>`;
+    h += A.hasGps ? `<button class="btn small" data-fmt="gpx">GPX</button><div class="note">${src === 'gpx' ? NOTE.gpx.gpx : NOTE.gpx.other}</div>` : '<div class="note">GPX needs positions, which this file does not have.</div>';
+    $('exportMenu').innerHTML = h; $('exportMenu').dataset.scope = scope;
+  }
+  $('exportBtn').onclick = (e) => { e.stopPropagation(); if (!A) return; ['lapMenu', 'chartMenu', 'setMenu', 'widgetMenu'].forEach((m) => { $(m).hidden = true; }); renderExportMenu(); $('exportMenu').hidden = !$('exportMenu').hidden; };
+  document.addEventListener('click', () => { $('exportMenu').hidden = true; });
+  $('exportMenu').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const sc = e.target.closest('[data-scope]'); if (sc) { store.set('exportSel', sc.dataset.scope === 'sel'); renderExportMenu(); return; }
+    const b = e.target.closest('[data-fmt]'); if (!b) return;
+    const range = $('exportMenu').dataset.scope === 'sel' && S.sel ? S.sel : null;
+    try {
+      const out = window.FFExport.run({ buf: lastFile.buf, name: lastFile.name, fit: A.fit, foot: A.foot, noTime: A.noTime, range, format: b.dataset.fmt });
+      const url = URL.createObjectURL(new Blob([out.data], { type: out.mime })), a = document.createElement('a');
+      a.href = url; a.download = out.name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+      $('exportMenu').hidden = true;
+    } catch (err) { console.error(err); toast('Export failed: ' + err.message); }
+  });
   // a setting that changes the computed data (units, smoothing) was changed: recompute from the parsed
   // file and redraw. Same records, so indices - and with them the current selection - stay valid.
   function reprocess() {
@@ -1274,7 +1321,7 @@
     widgetsUpdate('data');
   }
   // settings menu (gear, top right): theme and units
-  $('setGear').onclick = (e) => { e.stopPropagation(); $('lapMenu').hidden = true; $('chartMenu').hidden = true; $('setMenu').hidden = !$('setMenu').hidden; };
+  $('setGear').onclick = (e) => { e.stopPropagation(); $('lapMenu').hidden = true; $('chartMenu').hidden = true; $('widgetMenu').hidden = true; $('exportMenu').hidden = true; $('setMenu').hidden = !$('setMenu').hidden; };
   $('setMenu').addEventListener('click', (e) => e.stopPropagation());
   document.addEventListener('click', () => { $('setMenu').hidden = true; });
   syncUnits();
@@ -1430,7 +1477,7 @@
     const card = document.createElement('div'); card.className = 'card'; card.id = rec.id;
     card.innerHTML = `<div class="hd"><span class="grip" title="Drag to move this panel">⠿</span><h3>${def.title}</h3><span class="info" tabindex="0">i<span class="tip"><span class="tb">${def.tip || ''}</span></span></span><span class="wctl"></span><span class="sp"></span>` +
       '<button class="iconbtn wclose" title="Remove this widget (add it again from the Widgets menu)" aria-label="Remove widget">×</button><button class="fold" title="Collapse / expand panel" aria-label="Collapse or expand panel">▾</button></div>' +
-      '<div class="wna muted small" hidden>Not available: this file does not contain the data this widget needs.</div><div class="wbody"></div>';
+      '<div class="wna muted small" hidden>Not available: this file does not contain the data this widget needs.</div><div class="wbody"></div><div class="vgrip wgrip" title="Drag to change the height of this widget"></div>';
     cols[colIdx == null ? (def.col === 'R' ? 1 : 0) : colIdx].appendChild(card);
     initCard(card);
     const w = WLIVE[rec.id] = { type: rec.type, card, inst: null, dirty: true };
@@ -1438,6 +1485,16 @@
     rec.opts = rec.opts || {};
     try { w.inst = def.create({ card, body: card.querySelector('.wbody'), ctl: card.querySelector('.wctl'), opts: rec.opts, save: saveW, title: (t) => { card.querySelector('h3').textContent = t; } }); }
     catch (e) { console.error('widget ' + rec.type, e); }
+    // height: the widget says how tall its main part is (inst.height = [get, set]); the grip changes it by the drag distance
+    const grip = card.querySelector('.wgrip'), hh = w.inst && w.inst.height;
+    if (!hh) grip.remove();
+    else grip.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); grip.setPointerCapture(e.pointerId); grip.classList.add('drag');
+      const y0 = e.clientY, h0 = hh[0]();
+      const move = (ev) => { rec.opts.h = Math.round(Math.max(120, Math.min(1600, h0 + ev.clientY - y0))); hh[1](rec.opts.h); };
+      const up = () => { grip.classList.remove('drag'); grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up); saveW(); };
+      grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+    });
     widgetRun(w, 'load');
   }
   function addWidget(type) {
@@ -1468,7 +1525,7 @@
     }
     $('widgetMenu').innerHTML = h;
   }
-  $('widgetBtn').onclick = (e) => { e.stopPropagation(); ['lapMenu', 'chartMenu', 'setMenu'].forEach((m) => { $(m).hidden = true; }); renderWidgetMenu(); $('widgetMenu').hidden = !$('widgetMenu').hidden; };
+  $('widgetBtn').onclick = (e) => { e.stopPropagation(); ['lapMenu', 'chartMenu', 'setMenu', 'exportMenu'].forEach((m) => { $(m).hidden = true; }); renderWidgetMenu(); $('widgetMenu').hidden = !$('widgetMenu').hidden; };
   $('widgetMenu').addEventListener('click', (e) => { e.stopPropagation(); const b = e.target.closest('button[data-add]'); if (b) addWidget(b.dataset.add); });
   $('widgetMenu').addEventListener('change', (e) => {
     const t = e.target;
@@ -1477,6 +1534,12 @@
   });
   document.addEventListener('click', () => { $('widgetMenu').hidden = true; });
 
+  $('forgetKeys').onclick = () => {
+    const ids = new Set(); for (const id in LAYERS) if (LAYERS[id].key) ids.add(LAYERS[id].key.store);
+    ids.forEach((k) => store.del(k));
+    if (LAYERS[S.layer].key) { if (map) setLayer('topo'); else store.set('layer', 'topo'); }
+    $('setMenu').hidden = true;
+  };
   $('resetLayout').onclick = () => {
     ['rw', 'mapH', 'chartH', 'order', 'folded', 'widgets'].forEach((k) => store.del(k));
     for (const k in folded) delete folded[k];
@@ -1493,6 +1556,7 @@
     get A() { return A; }, S, METRICS, KEYS, UN, U, LAYERS, store, cssVar,
     fmtDur, fmtPace, fx, quantile, roll, descOf, spd, paceOf, elevOf, PACE,
     colorOf, isZones, stats, selRange, activeSel, setSel, setHover, fitMap, posLabel,
+    isReplay: () => !!replay, setPicks, layerUrl,
     getMap: () => map,
     registerWidget(type, def) { WDEF[type] = def; },
     // called once by widgets.js after it registered everything: create the saved cards and restore their places

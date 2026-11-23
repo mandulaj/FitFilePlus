@@ -40,7 +40,8 @@
     return arr;
   }
 
-  function decodeRaw(buf) {
+  // visit (optional) is called for every message with its byte range: used by the exporter to copy messages unchanged
+  function decodeRaw(buf, visit) {
     const dv = new DataView(buf);
     const hs = dv.getUint8(0);
     if (dv.byteLength < 12 || String.fromCharCode(dv.getUint8(8), dv.getUint8(9), dv.getUint8(10), dv.getUint8(11)) !== '.FIT')
@@ -54,6 +55,7 @@
     let lastTs = 0;
 
     while (p < end) {
+      const at = p;
       const h = dv.getUint8(p++);
       let local, compressedOffset = null;
       if (h & 0x80) { local = (h >> 5) & 3; compressedOffset = h & 0x1f; }
@@ -72,6 +74,7 @@
             for (let i = 0; i < nd; i++, p += 3) dev.push([dv.getUint8(p), dv.getUint8(p + 1), dv.getUint8(p + 2)]);
           }
           defs[local] = { little, global, fields, dev };
+          if (visit) visit({ def: true, start: at, end: p, global });
           continue;
         }
       }
@@ -99,8 +102,9 @@
         devFieldDefs[m[0] + '_' + m[1]] = { name: one(m[3]), units: one(m[8]), baseType: m[2], scale: one(m[6]), offset: one(m[7]), nativeMesg: m[14], nativeField: m[15] };
       }
       (msgs[d.global] || (msgs[d.global] = [])).push(m);
+      if (visit) visit({ def: false, start: at, end: p, global: d.global, m, d, compressed: compressedOffset !== null });
     }
-    return { msgs, devFieldDefs };
+    return { msgs, devFieldDefs, headerSize: hs, end };
   }
 
   // Further standard `record` fields (FIT profile): num -> [key, label, unit, scale].
@@ -241,5 +245,6 @@
   }
 
   root.parseFit = parseFit;
+  root.fitWalk = decodeRaw;
   if (typeof module !== 'undefined' && module.exports) module.exports = { parseFit };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

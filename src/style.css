@@ -1,8 +1,8 @@
 :root {
   --bg: #0d1220; --card: #1a2033; --card2: #222a40; --line: #2c3550; --grid: #2c355066;
   --text: #e6e9f2; --muted: #8e97b3; --accent: #22e06b;
-  --pop: #0b101d; --veil: rgba(13,18,32,.85); --tipbg: rgba(13,18,32,.92); --sel: var(--sel); --rowline: #232b42;
-  --link: var(--link); --hl: var(--hl); --mapbg: #111; --good: #4ade80; --shadow: #0009;
+  --pop: #0b101d; --veil: rgba(13,18,32,.85); --tipbg: rgba(13,18,32,.92); --sel: #263a6e; --rowline: #232b42;
+  --link: #8ab4ff; --hl: #5b8cff; --mapbg: #111; --good: #4ade80; --shadow: #0009;
   color-scheme: dark;
 }
 :root[data-theme=black] {
@@ -183,6 +183,25 @@ header select { padding: 7px 8px; border-radius: 6px; }
 .wnote { font-size: 12px; color: var(--muted); margin-top: 6px; font-variant-numeric: tabular-nums; }
 .wbody table tbody tr.click { cursor: pointer; } .wbody table tbody tr.click:hover { background: var(--card2); }
 .wtabs { margin-bottom: 8px; }
-.map3d { width: 100%; border-radius: 8px; overflow: hidden; background: #3b4252; resize: vertical; min-height: 220px; }
+.map3d { width: 100%; border-radius: 8px; overflow: hidden; background: #3b4252; min-height: 160px; }
 .map3d-dot { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 3px solid #0b0f1a; box-shadow: 0 0 0 2px #fff, 0 2px 6px #000a; }
 .map3d .maplibregl-ctrl-attrib { font-size: 10px; }
+#setMenu a.btn { align-self: flex-start; text-decoration: none; margin-top: 4px; }
+
+/* top bar: wraps on narrow windows; replay controls */
+header { gap: 10px 16px; flex-wrap: wrap; } header > .row { flex-wrap: wrap; justify-content: flex-end; }
+header a.btn { text-decoration: none; }
+.transport { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+#playBtn { min-width: 40px; padding: 7px 10px; } .btn:disabled { opacity: .4; cursor: default; }
+#exportMenu { min-width: 250px; } #exportMenu .btn { align-self: stretch; text-align: left; margin-top: 2px; } #exportMenu .note { font-size: 11px; color: var(--muted); max-width: 260px; line-height: 1.4; }
+/* wide layout: the page itself does not scroll; each column scrolls on its own */
+@media (min-width: 901px) {
+  html, body { height: 100%; } body { display: flex; flex-direction: column; overflow: hidden; }
+  header { flex: none; } main { flex: 1; min-height: 0; padding: 0 0 0 14px; }
+  .col { overflow-y: auto; padding: 14px 0; scrollbar-width: thin; scrollbar-color: var(--line) transparent; } #colR { padding-right: 14px; } #colL { padding-right: 2px; }
+  .col > .card { flex: none; }
+}
+.wgrip { margin-bottom: -8px; }
+.wscroll { overflow-y: auto; }
+.maplogo { display: block; line-height: 0; } .maplogo img { display: block; filter: drop-shadow(0 0 2px #fff); }
+.map3d { position: relative; } .map3d-logo { position: absolute; left: 8px; bottom: 8px; z-index: 2; }
